@@ -61,6 +61,8 @@ val LocalWebRtcSessionManager: ProvidableCompositionLocal<WebRtcSessionManager> 
 
 class WebRtcSessionManagerImpl(
   private val context: Context,
+  private val currentUserId : String,
+  private val calleeId : String,
   override val signalingClient: SignalingClient,
   override val peerConnectionFactory: StreamPeerConnectionFactory
 ) : WebRtcSessionManager {
@@ -162,7 +164,7 @@ class WebRtcSessionManagerImpl(
         signalingClient.sendCommand(
           SignalingCommand.ICE,
           "${iceCandidate.sdpMid}$ICE_SEPARATOR${iceCandidate.sdpMLineIndex}$ICE_SEPARATOR${iceCandidate.sdp}"
-        )
+        ,calleeId)
       },
       onVideoTrack = { rtpTransceiver ->
         val track = rtpTransceiver?.receiver?.track() ?: return@makePeerConnection
@@ -201,7 +203,7 @@ class WebRtcSessionManagerImpl(
       if (offer != null) {
         sendAnswer()
       } else {
-        sendOffer()
+        sendOffer(calleeId)
       }
     }
   }
@@ -242,48 +244,56 @@ class WebRtcSessionManagerImpl(
     signalingClient.dispose()
   }
 
-  private suspend fun sendOffer() {
+  private suspend fun sendOffer(calleeId : String) {
     val offer = peerConnection.createOffer().getOrThrow()
     val result = peerConnection.setLocalDescription(offer)
     result.onSuccess {
-      signalingClient.sendCommand(SignalingCommand.OFFER, offer.description)
+      signalingClient.sendCommand(SignalingCommand.OFFER, offer.description,calleeId)
     }
     logger.d { "[SDP] send offer: ${offer.stringify()}" }
   }
 
   private suspend fun sendAnswer() {
+    logger.d { "send answer to remote" }
     peerConnection.setRemoteDescription(
       SessionDescription(SessionDescription.Type.OFFER, offer)
     )
+    logger.d { "send answer after setting remote description" }
     val answer = peerConnection.createAnswer().getOrThrow()
+    logger.d { "send answer after create answer" }
     val result = peerConnection.setLocalDescription(answer)
     result.onSuccess {
-      signalingClient.sendCommand(SignalingCommand.ANSWER, answer.description)
+     // signalingClient.sendCommand(SignalingCommand.ANSWER, answer.description,calleeId)
+      signalingClient.sendOfferCommand(SignalingCommand.ANSWER, answer.description)
+    }.onFailure {
+      logger.d { "send answer to remote error" }
     }
-    logger.d { "[SDP] send answer: ${answer.stringify()}" }
+   // logger.d { "[SDP] send answer: ${answer.stringify()}" }
   }
 
   private fun handleOffer(sdp: String) {
-    logger.d { "[SDP] handle offer: $sdp" }
-    offer = sdp
+      logger.d { "[SDP] handle offer: $sdp calleeId $calleeId" }
+      offer = sdp
   }
 
   private suspend fun handleAnswer(sdp: String) {
     logger.d { "[SDP] handle answer: $sdp" }
-    peerConnection.setRemoteDescription(
-      SessionDescription(SessionDescription.Type.ANSWER, sdp)
-    )
+      peerConnection.setRemoteDescription(
+        SessionDescription(SessionDescription.Type.ANSWER, sdp)
+      )
+
   }
 
   private suspend fun handleIce(iceMessage: String) {
-    val iceArray = iceMessage.split(ICE_SEPARATOR)
-    peerConnection.addIceCandidate(
-      IceCandidate(
-        iceArray[0],
-        iceArray[1].toInt(),
-        iceArray[2]
+      val iceArray = iceMessage.split(ICE_SEPARATOR)
+      peerConnection.addIceCandidate(
+        IceCandidate(
+          iceArray[0],
+          iceArray[1].toInt(),
+          iceArray[2]
+        )
       )
-    )
+
   }
 
   private fun buildCameraCapturer(): VideoCapturer {

@@ -38,7 +38,7 @@ import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 import org.webrtc.audio.JavaAudioDeviceModule
 
-class StreamPeerConnectionFactory constructor(
+class StreamPeerConnectionFactory(
   private val context: Context
 ) {
   private val webRtcLogger by taggedLogger("Call:WebRTC")

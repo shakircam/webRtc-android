@@ -16,6 +16,7 @@
 
 package io.getstream.webrtc.sample.compose.webrtc.utils
 
+import android.util.Log
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
 import kotlin.coroutines.resume
@@ -37,8 +38,11 @@ suspend inline fun createValue(
       }
     }
 
-    override fun onCreateFailure(message: String?) =
+    override fun onCreateFailure(message: String?) {
+      Log.e("SDP", "SessionDescription creation failed: $message")
       it.resume(Result.failure(RuntimeException(message)))
+    }
+
 
     /**
      * We ignore set results.

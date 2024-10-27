@@ -30,27 +30,30 @@ fun Application.module(testing: Boolean = false) {
         get("/") {
             call.respond("Hello from WebRTC signaling server")
         }
-        webSocket("/rtc") {
-            val sessionID = UUID.randomUUID()
+        webSocket("/rtc/{callerId}") {
+           // val sessionID = UUID.randomUUID()
+            val sessionID : String = (call.parameters["callerId"] ?: 0).toString()
+            log.info("onSessionConnect userId = $sessionID sessionID = $sessionID")
             try {
                 SessionManager.onSessionStarted(sessionID, this)
 
                 for (frame in incoming) {
                     when (frame) {
                         is Frame.Text -> {
+                            log.info("onMessage coming from client $sessionID $frame")
                             SessionManager.onMessage(sessionID, frame.readText())
                         }
 
                         else -> Unit
                     }
                 }
-                println("Exiting incoming loop, closing session: $sessionID")
+                log.info("Exiting incoming loop, closing session: $sessionID")
                 SessionManager.onSessionClose(sessionID)
             } catch (e: ClosedReceiveChannelException) {
-                println("onClose $sessionID")
+                log.error("onClose $sessionID")
                 SessionManager.onSessionClose(sessionID)
             } catch (e: Throwable) {
-                println("onError $sessionID $e")
+                log.error("onError $sessionID $e")
                 SessionManager.onSessionClose(sessionID)
             }
         }
