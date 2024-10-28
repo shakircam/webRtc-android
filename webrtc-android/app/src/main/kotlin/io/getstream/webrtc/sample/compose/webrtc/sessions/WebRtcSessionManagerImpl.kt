@@ -29,6 +29,7 @@ import androidx.core.content.getSystemService
 import io.getstream.log.taggedLogger
 import io.getstream.webrtc.sample.compose.webrtc.SignalingClient
 import io.getstream.webrtc.sample.compose.webrtc.SignalingCommand
+import io.getstream.webrtc.sample.compose.webrtc.WebRTCSessionState
 import io.getstream.webrtc.sample.compose.webrtc.audio.AudioHandler
 import io.getstream.webrtc.sample.compose.webrtc.audio.AudioSwitchHandler
 import io.getstream.webrtc.sample.compose.webrtc.peer.StreamPeerConnection
@@ -39,7 +40,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import org.webrtc.AudioTrack
 import org.webrtc.Camera2Capturer
@@ -70,8 +73,15 @@ class WebRtcSessionManagerImpl(
 
   private val sessionManagerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+  // session flow to send information about the session state to the subscribers
+  private val _sessionStateFlow = MutableStateFlow(WebRTCSessionState.Calling)
+ // val sessionStateFlow: StateFlow<WebRTCSessionState> = _sessionStateFlow
+ override val sessionStateFlow: StateFlow<WebRTCSessionState>
+   get() = _sessionStateFlow
+
   // used to send local video track to the fragment
   private val _localVideoTrackFlow = MutableSharedFlow<VideoTrack>()
+
   override val localVideoTrackFlow: SharedFlow<VideoTrack> = _localVideoTrackFlow
 
   // used to send remote video track to the sender
@@ -161,10 +171,10 @@ class WebRtcSessionManagerImpl(
       type = StreamPeerType.SUBSCRIBER,
       mediaConstraints = mediaConstraints,
       onIceCandidateRequest = { iceCandidate, _ ->
+        val iceMessage = "$currentUserId$ICE_SEPARATOR${iceCandidate.sdpMid}$ICE_SEPARATOR${iceCandidate.sdpMLineIndex}$ICE_SEPARATOR${iceCandidate.sdp}"
         signalingClient.sendCommand(
           SignalingCommand.ICE,
-          "${iceCandidate.sdpMid}$ICE_SEPARATOR${iceCandidate.sdpMLineIndex}$ICE_SEPARATOR${iceCandidate.sdp}"
-        ,calleeId)
+          iceMessage)
       },
       onVideoTrack = { rtpTransceiver ->
         val track = rtpTransceiver?.receiver?.track() ?: return@makePeerConnection
@@ -203,6 +213,7 @@ class WebRtcSessionManagerImpl(
       if (offer != null) {
         sendAnswer()
       } else {
+        logger.d { "Calling to start" }
         sendOffer(calleeId)
       }
     }
@@ -247,52 +258,79 @@ class WebRtcSessionManagerImpl(
   private suspend fun sendOffer(calleeId : String) {
     val offer = peerConnection.createOffer().getOrThrow()
     val result = peerConnection.setLocalDescription(offer)
+    val message = "$calleeId ${offer.description}"
     result.onSuccess {
-      signalingClient.sendCommand(SignalingCommand.OFFER, offer.description,calleeId)
+      signalingClient.sendCommand(SignalingCommand.OFFER, message)
     }
     logger.d { "[SDP] send offer: ${offer.stringify()}" }
   }
 
   private suspend fun sendAnswer() {
-    logger.d { "send answer to remote" }
     peerConnection.setRemoteDescription(
       SessionDescription(SessionDescription.Type.OFFER, offer)
     )
-    logger.d { "send answer after setting remote description" }
     val answer = peerConnection.createAnswer().getOrThrow()
-    logger.d { "send answer after create answer" }
     val result = peerConnection.setLocalDescription(answer)
+    val message = "$currentUserId ${answer.description}"
     result.onSuccess {
-     // signalingClient.sendCommand(SignalingCommand.ANSWER, answer.description,calleeId)
-      signalingClient.sendOfferCommand(SignalingCommand.ANSWER, answer.description)
-    }.onFailure {
-      logger.d { "send answer to remote error" }
+      signalingClient.sendCommand(SignalingCommand.ANSWER, message)
     }
    // logger.d { "[SDP] send answer: ${answer.stringify()}" }
   }
 
   private fun handleOffer(sdp: String) {
-      logger.d { "[SDP] handle offer: $sdp calleeId $calleeId" }
-      offer = sdp
+    val components = sdp.split(" ", limit = 2)
+    val targetUserId = components[0]
+    val offerDescription = components[1]
+    logger.d { "[SDP] handle offer for target userId: $targetUserId" }
+    if (targetUserId == currentUserId) {  // `localUserId` should be a unique identifier for the device
+      logger.d { "[SDP] handle offer: $offerDescription" }
+      offer = offerDescription
+
+      val state = getSeparatedMessage(WebRTCSessionState.Answer.toString())
+      logger.d { "received state message: $state" }
+       _sessionStateFlow.value = WebRTCSessionState.valueOf(state)
+
+    } else {
+      logger.d { "[SDP] offer received for different user, ignoring." }
+    }
+//      logger.d { "[SDP] handle offer: $sdp calleeId $calleeId" }
+//      offer = sdp
   }
+
+  private fun getSeparatedMessage(text: String) = text.substringAfter(' ')
 
   private suspend fun handleAnswer(sdp: String) {
     logger.d { "[SDP] handle answer: $sdp" }
+    val components = sdp.split(" ", limit = 2)
+    val answerDescription = components[1]
       peerConnection.setRemoteDescription(
-        SessionDescription(SessionDescription.Type.ANSWER, sdp)
+        SessionDescription(SessionDescription.Type.ANSWER, answerDescription)
       )
-
   }
 
   private suspend fun handleIce(iceMessage: String) {
       val iceArray = iceMessage.split(ICE_SEPARATOR)
+    val targetUserId = iceArray[0] // Extract the target user ID
+    val sdpMid = iceArray[1]
+    val sdpMLineIndex = iceArray[2].toInt()
+    val candidate = iceArray[3]
+    logger.d { "[ICE] ICE candidate targetUser $targetUserId" }
+    // Ensure ICE candidate is processed only if it's for the current user
+    if (targetUserId == currentUserId) {
       peerConnection.addIceCandidate(
-        IceCandidate(
-          iceArray[0],
-          iceArray[1].toInt(),
-          iceArray[2]
-        )
+        IceCandidate(sdpMid, sdpMLineIndex, candidate)
       )
+    } else {
+      logger.d { "[ICE] ICE candidate for different user, ignoring." }
+    }
+//      peerConnection.addIceCandidate(
+//        IceCandidate(
+//          iceArray[0],
+//          iceArray[1].toInt(),
+//          iceArray[2]
+//        )
+//      )
 
   }
 

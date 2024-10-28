@@ -33,35 +33,36 @@ import androidx.compose.ui.unit.sp
 import io.getstream.webrtc.sample.compose.R
 import io.getstream.webrtc.sample.compose.webrtc.WebRTCSessionState
 
+
 @Composable
 fun StageScreen(
   state: WebRTCSessionState,
   onJoinCall: () -> Unit
 ) {
   Box(modifier = Modifier.fillMaxSize()) {
-    var enabledCall by remember { mutableStateOf(false) }
+    var enabledCall by remember { mutableStateOf(true) }
 
     val text = when (state) {
-      WebRTCSessionState.Offline -> {
-        enabledCall = false
-        stringResource(id = R.string.button_start_session)
-      }
-      WebRTCSessionState.Impossible -> {
-        enabledCall = false
-        stringResource(id = R.string.session_impossible)
-      }
-      WebRTCSessionState.Ready -> {
+//      WebRTCSessionState.Offline -> {
+//        enabledCall = false
+//        stringResource(id = R.string.button_start_session)
+//      }
+//      WebRTCSessionState.Impossible -> {
+//        enabledCall = false
+//        stringResource(id = R.string.session_impossible)
+//      }
+      WebRTCSessionState.Calling -> {
         enabledCall = true
-        stringResource(id = R.string.session_ready)
+        stringResource(id = R.string.button_start_call)
       }
-      WebRTCSessionState.Creating -> {
+      WebRTCSessionState.Answer -> {
         enabledCall = true
-        stringResource(id = R.string.session_creating)
+        stringResource(id = R.string.button_accept_call)
       }
-      WebRTCSessionState.Active -> {
-        enabledCall = false
-        stringResource(id = R.string.session_active)
-      }
+//      WebRTCSessionState.Active -> {
+//        enabledCall = false
+//        stringResource(id = R.string.session_active)
+//      }
     }
 
     Button(

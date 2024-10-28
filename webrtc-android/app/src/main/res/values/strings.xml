@@ -24,6 +24,8 @@
   <string name="session_active">Session Active</string>
 
   <string name="button_start_session">Start session</string>
+  <string name="button_start_call">Start Calling</string>
+  <string name="button_accept_call">Accept Call</string>
   <string name="button_join_session">Join session</string>
 
   <string name="button_end_session">End Session</string>

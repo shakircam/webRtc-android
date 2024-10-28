@@ -30,31 +30,32 @@ fun Application.module(testing: Boolean = false) {
         get("/") {
             call.respond("Hello from WebRTC signaling server")
         }
-        webSocket("/rtc/{callerId}") {
+        webSocket("/rtc/{callerId}/{calleeId}") {
            // val sessionID = UUID.randomUUID()
-            val sessionID : String = (call.parameters["callerId"] ?: 0).toString()
-            log.info("onSessionConnect userId = $sessionID sessionID = $sessionID")
+            val callerId : String = (call.parameters["callerId"] ?: 0).toString()
+            val calleeId : String = (call.parameters["calleeId"] ?: 0).toString()
+            log.info("onSessionConnect userId = $callerId")
             try {
-                SessionManager.onSessionStarted(sessionID, this)
+                SessionManager.onSessionStarted(callerId, this)
 
                 for (frame in incoming) {
                     when (frame) {
                         is Frame.Text -> {
-                            log.info("onMessage coming from client $sessionID $frame")
-                            SessionManager.onMessage(sessionID, frame.readText())
+                           // log.info("onMessage coming from client $callerId $frame")
+                            SessionManager.onMessage(frame.readText())
                         }
 
                         else -> Unit
                     }
                 }
-                log.info("Exiting incoming loop, closing session: $sessionID")
-                SessionManager.onSessionClose(sessionID)
+                log.info("Exiting incoming loop, closing session: $callerId")
+                SessionManager.onSessionClose(callerId,calleeId)
             } catch (e: ClosedReceiveChannelException) {
-                log.error("onClose $sessionID")
-                SessionManager.onSessionClose(sessionID)
+                log.error("onClose $callerId")
+                SessionManager.onSessionClose(callerId,calleeId)
             } catch (e: Throwable) {
-                log.error("onError $sessionID $e")
-                SessionManager.onSessionClose(sessionID)
+                log.error("onError $callerId $e")
+                SessionManager.onSessionClose(callerId,calleeId)
             }
         }
     }
