@@ -30,32 +30,28 @@ fun Application.module(testing: Boolean = false) {
         get("/") {
             call.respond("Hello from WebRTC signaling server")
         }
-        webSocket("/rtc/{callerId}/{calleeId}") {
-           // val sessionID = UUID.randomUUID()
-            val callerId : String = (call.parameters["callerId"] ?: 0).toString()
-            val calleeId : String = (call.parameters["calleeId"] ?: 0).toString()
-            log.info("onSessionConnect userId = $callerId")
+        webSocket("/rtc") {
+            val sessionID = UUID.randomUUID()
             try {
-                SessionManager.onSessionStarted(callerId, this)
+                SessionManager.onSessionStarted(sessionID, this)
 
                 for (frame in incoming) {
                     when (frame) {
                         is Frame.Text -> {
-                           // log.info("onMessage coming from client $callerId $frame")
-                            SessionManager.onMessage(frame.readText())
+                            SessionManager.onMessage(sessionID, frame.readText())
                         }
 
                         else -> Unit
                     }
                 }
-                log.info("Exiting incoming loop, closing session: $callerId")
-                SessionManager.onSessionClose(callerId,calleeId)
+                println("Exiting incoming loop, closing session: $sessionID")
+                SessionManager.onSessionClose(sessionID)
             } catch (e: ClosedReceiveChannelException) {
-                log.error("onClose $callerId")
-                SessionManager.onSessionClose(callerId,calleeId)
+                println("onClose $sessionID")
+                SessionManager.onSessionClose(sessionID)
             } catch (e: Throwable) {
-                log.error("onError $callerId $e")
-                SessionManager.onSessionClose(callerId,calleeId)
+                println("onError $sessionID $e")
+                SessionManager.onSessionClose(sessionID)
             }
         }
     }

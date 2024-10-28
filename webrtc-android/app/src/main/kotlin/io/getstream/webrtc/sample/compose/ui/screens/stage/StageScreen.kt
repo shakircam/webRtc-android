@@ -40,29 +40,29 @@ fun StageScreen(
   onJoinCall: () -> Unit
 ) {
   Box(modifier = Modifier.fillMaxSize()) {
-    var enabledCall by remember { mutableStateOf(true) }
+    var enabledCall by remember { mutableStateOf(false) }
 
     val text = when (state) {
-//      WebRTCSessionState.Offline -> {
-//        enabledCall = false
-//        stringResource(id = R.string.button_start_session)
-//      }
-//      WebRTCSessionState.Impossible -> {
-//        enabledCall = false
-//        stringResource(id = R.string.session_impossible)
-//      }
-      WebRTCSessionState.Calling -> {
-        enabledCall = true
-        stringResource(id = R.string.button_start_call)
+      WebRTCSessionState.Offline -> {
+        enabledCall = false
+        stringResource(id = R.string.button_start_session)
       }
-      WebRTCSessionState.Answer -> {
-        enabledCall = true
-        stringResource(id = R.string.button_accept_call)
+      WebRTCSessionState.Impossible -> {
+        enabledCall = false
+        stringResource(id = R.string.session_impossible)
       }
-//      WebRTCSessionState.Active -> {
-//        enabledCall = false
-//        stringResource(id = R.string.session_active)
-//      }
+      WebRTCSessionState.Ready -> {
+        enabledCall = true
+        stringResource(id = R.string.session_ready)
+      }
+      WebRTCSessionState.Creating -> {
+        enabledCall = true
+        stringResource(id = R.string.session_creating)
+      }
+      WebRTCSessionState.Active -> {
+        enabledCall = false
+        stringResource(id = R.string.session_active)
+      }
     }
 
     Button(
