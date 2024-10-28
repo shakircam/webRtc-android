@@ -16,6 +16,7 @@
 
 package io.getstream.webrtc.sample.compose.webrtc
 
+
 import io.getstream.log.taggedLogger
 import io.getstream.webrtc.sample.compose.BuildConfig
 import kotlinx.coroutines.CoroutineScope
@@ -32,43 +33,31 @@ import okhttp3.Request
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 
-class SignalingClient(callerId: String ) {
+class SignalingClient(callerId: String, calleeId: String ) {
   private val logger by taggedLogger("Call:SignalingClient")
   private val signalingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private val client = OkHttpClient()
   private val request = Request
     .Builder()
-    .url("${BuildConfig.SIGNALING_SERVER_IP_ADDRESS}/$callerId")
+    .url("${BuildConfig.SIGNALING_SERVER_IP_ADDRESS}/$callerId/$calleeId")
     .build()
 
   // opening web socket with signaling server
   private val ws = client.newWebSocket(request, SignalingWebSocketListener())
 
-  // session flow to send information about the session state to the subscribers
-  private val _sessionStateFlow = MutableStateFlow(WebRTCSessionState.Offline)
-  val sessionStateFlow: StateFlow<WebRTCSessionState> = _sessionStateFlow
+//  // session flow to send information about the session state to the subscribers
+//  private val _sessionStateFlow = MutableStateFlow(WebRTCSessionState.Calling)
+//  val sessionStateFlow: StateFlow<WebRTCSessionState> = _sessionStateFlow
 
  //  signaling commands to send commands to value pairs to the subscribers
-  private val _signalingCommandFlow = MutableSharedFlow<Triple<SignalingCommand, String, String>>()
-  val signalingCommandFlow: SharedFlow<Triple<SignalingCommand, String, String>> = _signalingCommandFlow
 
-//  private val _signalingCommandFlow = MutableSharedFlow<Pair<SignalingCommand, String>>()
-//  val signalingCommandFlow: SharedFlow<Pair<SignalingCommand, String>> = _signalingCommandFlow
+  private val _signalingCommandFlow = MutableSharedFlow<Pair<SignalingCommand, String>>()
+  val signalingCommandFlow: SharedFlow<Pair<SignalingCommand, String>> = _signalingCommandFlow
 
-  fun sendCommand(signalingCommand: SignalingCommand, message: String, calleeId: String?) {
-    logger.d { "[sendCommand] $signalingCommand $message" }
-    ws.send("$signalingCommand $message callee:$calleeId")
-  }
-
-  fun sendOfferCommand(signalingCommand: SignalingCommand, message: String) {
+  fun sendCommand(signalingCommand: SignalingCommand, message: String) {
     logger.d { "[sendCommand] $signalingCommand $message" }
     ws.send("$signalingCommand $message")
   }
-
-//  fun sendCommand(signalingCommand: SignalingCommand, message: String) {
-//    logger.d { "[sendCommand] $signalingCommand $message" }
-//    ws.send("$signalingCommand $message")
-//  }
 
   private inner class SignalingWebSocketListener : WebSocketListener() {
     override fun onMessage(webSocket: WebSocket, text: String) {
@@ -87,47 +76,50 @@ class SignalingClient(callerId: String ) {
 
   private fun handleStateMessage(message: String) {
     val state = getSeparatedMessage(message)
-    _sessionStateFlow.value = WebRTCSessionState.valueOf(state)
+    logger.d { "received state message: $state" }
+   // _sessionStateFlow.value = WebRTCSessionState.valueOf(state)
+  }
+
+  private fun handleSignalingCommand(command: SignalingCommand, text: String) {
+    val value = getSeparatedMessage(text)
+    logger.d { "received signaling: $command $value" }
+    signalingScope.launch {
+      _signalingCommandFlow.emit(command to value)
+    }
   }
 
 //  private fun handleSignalingCommand(command: SignalingCommand, text: String) {
-//    val value = getSeparatedMessage(text)
-//    logger.d { "received signaling: $command $value" }
+//    // Assuming the message follows the format: "<message> callee:<calleeId>"
+//    val (messagePart, calleeIdPart) = text.substringAfter(' ').split("callee:")
+//
+//    val message = messagePart.trim()
+//    val calleeId = calleeIdPart.trim()
+//
+//    logger.d { "received signaling: $command, calleeId: $calleeId" }
+//
 //    signalingScope.launch {
-//      _signalingCommandFlow.emit(command to value)
+//      // Emit the Triple with command, message, and calleeId
+//      _signalingCommandFlow.emit(Triple(command, message, calleeId))
 //    }
 //  }
-
-  private fun handleSignalingCommand(command: SignalingCommand, text: String) {
-    // Assuming the message follows the format: "<message> callee:<calleeId>"
-    val (messagePart, calleeIdPart) = text.substringAfter(' ').split("callee:")
-
-    val message = messagePart.trim()
-    val calleeId = calleeIdPart.trim()
-
-    logger.d { "received signaling: $command, calleeId: $calleeId" }
-
-    signalingScope.launch {
-      // Emit the Triple with command, message, and calleeId
-      _signalingCommandFlow.emit(Triple(command, message, calleeId))
-    }
-  }
 
   private fun getSeparatedMessage(text: String) = text.substringAfter(' ')
 
   fun dispose() {
-    _sessionStateFlow.value = WebRTCSessionState.Offline
+  //  _sessionStateFlow.value = WebRTCSessionState.Calling
     signalingScope.cancel()
     ws.cancel()
   }
 }
 
 enum class WebRTCSessionState {
-  Active, // Offer and Answer messages has been sent
-  Creating, // Creating session, offer has been sent
-  Ready, // Both clients available and ready to initiate session
-  Impossible, // We have less than two clients connected to the server
-  Offline // unable to connect signaling server
+//  Active, // Offer and Answer messages has been sent
+//  Creating, // Creating session, offer has been sent
+//  Ready, // Both clients available and ready to initiate session
+//  Impossible, // We have less than two clients connected to the server
+//  Offline // unable to connect signaling server
+  Calling,
+  Answer
 }
 
 enum class SignalingCommand {

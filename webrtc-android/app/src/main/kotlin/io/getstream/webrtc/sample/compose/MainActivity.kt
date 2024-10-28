@@ -47,9 +47,9 @@ class MainActivity : ComponentActivity() {
 
     val sessionManager: WebRtcSessionManager = WebRtcSessionManagerImpl(
       context = this,
-      currentUserId = "1",
-      calleeId = "2",
-      signalingClient = SignalingClient(callerId = "1"),
+      currentUserId = "2",
+      calleeId = "1",
+      signalingClient = SignalingClient(callerId = "2", calleeId = "1"),
       peerConnectionFactory = StreamPeerConnectionFactory(this)
     )
 
@@ -62,7 +62,9 @@ class MainActivity : ComponentActivity() {
             color = MaterialTheme.colors.background
           ) {
             var onCallScreen by remember { mutableStateOf(false) }
-            val state by sessionManager.signalingClient.sessionStateFlow.collectAsState()
+
+            val state by sessionManager.sessionStateFlow.collectAsState()
+
 
             if (!onCallScreen) {
               StageScreen(state = state) { onCallScreen = true }
