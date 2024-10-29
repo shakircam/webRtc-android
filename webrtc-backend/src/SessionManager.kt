@@ -1,3 +1,4 @@
+
 import io.ktor.http.cio.websocket.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.*
@@ -116,29 +117,41 @@ object SessionManager {
     }
 
     private fun handleCallResponse(userId: String, message: String) {
+        print("[handleCallResponse] from $userId: $message")
         val response = message.substringAfter("${MessageType.CALL_RESPONSE} ")
-        val callerId = activeCallSessions.entries.find { it.value.targetUserId == userId }?.key ?: return
-        val callSession = activeCallSessions[callerId] ?: return
+        val parts = response.split(" ")
+        val action = parts[0] // "accept" or "reject"
+        val callerId = parts[1]
 
-        if (response == "accept") {
-            callSession.state = WebRTCSessionState.Ready
+        print("[handleCallResponse] action=$action, callerId=$callerId")
+
+        if (action == "accept") {
+            activeCallSessions[callerId] = CallSession(
+                callerId = callerId,
+                targetUserId = userId,
+                state = WebRTCSessionState.Ready
+            )
             clients[callerId]?.session?.send("${MessageType.CALL_ACCEPTED} $userId")
+            print("[handleCallResponse] Call accepted. Notified caller: $callerId")
         } else {
-            callSession.state = WebRTCSessionState.Impossible
             clients[callerId]?.session?.send("${MessageType.CALL_REJECTED} $userId")
             activeCallSessions.remove(callerId)
+            print("[handleCallResponse] Call rejected. Notified caller: $callerId")
         }
     }
 
     private fun handleOffer(callerId: String, message: String) {
+        print("[handleOffer] from $callerId")
         val callSession = activeCallSessions[callerId] ?: return
         if (callSession.state != WebRTCSessionState.Ready) {
+            print("[handleOffer] Invalid state: ${callSession.state}")
             return
         }
 
         callSession.state = WebRTCSessionState.Creating
         val targetUserId = callSession.targetUserId
         clients[targetUserId]?.session?.send(message)
+        print("[handleOffer] Forwarded offer to $targetUserId")
     }
 
     private fun handleAnswer(userId: String, message: String) {

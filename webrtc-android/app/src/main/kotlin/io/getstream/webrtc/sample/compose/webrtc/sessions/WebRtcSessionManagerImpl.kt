@@ -51,6 +51,7 @@ import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.MediaStreamTrack
 import org.webrtc.RtpSender
+import org.webrtc.RtpTransceiver
 import org.webrtc.SessionDescription
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoCapturer
@@ -70,6 +71,9 @@ class WebRtcSessionManagerImpl(
 ) : WebRtcSessionManager {
   private val logger by taggedLogger("Call:LocalWebRtcSessionManager")
   private val sessionManagerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+  private var isTracksAdded = false
+  private var isCallSetupComplete = false
+  private var peerConnection: StreamPeerConnection? = null
 
   private val _availableUsersFlow = MutableStateFlow<List<String>>(emptyList())
   override val availableUsersFlow: StateFlow<List<String>> = _availableUsersFlow
@@ -155,8 +159,9 @@ class WebRtcSessionManagerImpl(
     )
   }
 
-  private val peerConnection: StreamPeerConnection by lazy {
-    peerConnectionFactory.makePeerConnection(
+  private fun createPeerConnection() {
+    logger.d { "[createPeerConnection] Creating new peer connection" }
+    peerConnection = peerConnectionFactory.makePeerConnection(
       coroutineScope = sessionManagerScope,
       configuration = peerConnectionFactory.rtcConfig,
       type = StreamPeerType.SUBSCRIBER,
@@ -168,9 +173,21 @@ class WebRtcSessionManagerImpl(
         )
       },
       onVideoTrack = { rtpTransceiver ->
+        logger.d { "[onVideoTrack] Received video track, transceiver: $rtpTransceiver" }
         val track = rtpTransceiver?.receiver?.track() ?: return@makePeerConnection
         if (track.kind() == MediaStreamTrack.VIDEO_TRACK_KIND) {
           val videoTrack = track as VideoTrack
+          logger.d { "[onVideoTrack] Emitting remote video track" }
+          videoTrack.setEnabled(true)
+          sessionManagerScope.launch {
+            _remoteVideoTrackFlow.emit(videoTrack)
+          }
+        }
+      },
+      onStreamAdded = { stream ->
+        logger.d { "[onStreamAdded] Stream added: ${stream.videoTracks.size} video tracks" }
+        stream.videoTracks.firstOrNull()?.let { videoTrack ->
+          videoTrack.setEnabled(true)
           sessionManagerScope.launch {
             _remoteVideoTrackFlow.emit(videoTrack)
           }
@@ -199,7 +216,11 @@ class WebRtcSessionManagerImpl(
       signalingClient.callResponseFlow.collect { (remoteUserId, accepted) ->
         if (accepted) {
           _callStateFlow.value = CallState.Connected(remoteUserId)
+          val isOutgoingCall = _callStateFlow.value is CallState.OutgoingCall
           setupCall()
+          if (isOutgoingCall) {
+            sendOffer()
+          }
         } else {
           _callStateFlow.value = CallState.Rejected(remoteUserId)
           cleanupCall()
@@ -209,28 +230,37 @@ class WebRtcSessionManagerImpl(
 
     // Monitor signaling commands
     sessionManagerScope.launch {
-      signalingClient.signalingCommandFlow
-        .collect { commandToValue ->
-          when (commandToValue.first) {
-            SignalingClient.SignalingCommand.OFFER -> handleOffer(commandToValue.second)
-            SignalingClient.SignalingCommand.ANSWER -> handleAnswer(commandToValue.second)
-            SignalingClient.SignalingCommand.ICE -> handleIce(commandToValue.second)
-            else -> Unit
+      signalingClient.signalingCommandFlow.collect { (command, value) ->
+        logger.d { "[SignalingCommand] Received: $command" }
+        when (command) {
+          SignalingClient.SignalingCommand.OFFER -> {
+            if (_callStateFlow.value is CallState.Connected) {
+              handleOffer(value)
+            }
           }
+          SignalingClient.SignalingCommand.ANSWER -> {
+            if (_callStateFlow.value is CallState.Connected) {
+              handleAnswer(value)
+            }
+          }
+          SignalingClient.SignalingCommand.ICE -> handleIce(value)
+          else -> Unit
         }
+      }
     }
   }
 
   override fun startCall(targetUserId: String) {
+    cleanupCall()
     _callStateFlow.value = CallState.OutgoingCall(targetUserId)
     signalingClient.initiateCall(targetUserId)
   }
 
   override fun acceptIncomingCall() {
     val currentState = _callStateFlow.value as? CallState.IncomingCall ?: return
+    cleanupCall()
     signalingClient.acceptCall(currentState.remoteUserId)
     _callStateFlow.value = CallState.Connected(currentState.remoteUserId)
-    setupCall()
   }
 
   override fun rejectIncomingCall() {
@@ -246,40 +276,85 @@ class WebRtcSessionManagerImpl(
     }
   }
 
+
   private fun setupCall() {
-    setupAudio()
-    // Store the senders when adding tracks
-    localVideoSender = peerConnection.connection.addTrack(localVideoTrack)
-    localAudioSender = peerConnection.connection.addTrack(localAudioTrack)
+    if (isCallSetupComplete) {
+      logger.d { "[setupCall] Call setup already complete" }
+      return
+    }
 
-    sessionManagerScope.launch {
-      _localVideoTrackFlow.emit(localVideoTrack)
+    logger.d { "[setupCall] Setting up call" }
 
-      when (val state = _callStateFlow.value) {
-        is CallState.Connected -> {
-          if (_callStateFlow.value is CallState.OutgoingCall) {
-            sendOffer()
-          }
-        }
-        else -> Unit
+    try {
+      // Create new peer connection if needed
+      if (peerConnection == null) {
+        createPeerConnection()
       }
+
+      // Setup audio first
+      setupAudio()
+
+      peerConnection?.connection?.let { connection ->
+        // Add transceivers for sending and receiving media
+        connection.addTransceiver(
+          localVideoTrack,
+          RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_RECV)
+        )
+        connection.addTransceiver(
+          localAudioTrack,
+          RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_RECV)
+        )
+
+        // Store senders
+        localVideoSender = connection.getSenders().find { it.track()?.kind() == MediaStreamTrack.VIDEO_TRACK_KIND }
+        localAudioSender = connection.getSenders().find { it.track()?.kind() == MediaStreamTrack.AUDIO_TRACK_KIND }
+      }
+
+      // Emit local video track
+      sessionManagerScope.launch {
+        _localVideoTrackFlow.emit(localVideoTrack)
+      }
+
+      isCallSetupComplete = true
+      logger.d { "[setupCall] Call setup completed successfully" }
+    } catch (e: Exception) {
+      logger.e { "[setupCall] Error setting up call: ${e.message}" }
+      _callStateFlow.value = CallState.Error("Failed to setup call: ${e.message}")
+      cleanupCall()
     }
   }
 
   private fun cleanupCall() {
-    remoteVideoTrackFlow.replayCache.forEach { it.dispose() }
+    logger.d { "[cleanupCall] Cleaning up call resources" }
 
-    // Remove senders instead of tracks
-    localVideoSender?.let { sender ->
-      peerConnection.connection.removeTrack(sender)
-    }
-    localAudioSender?.let { sender ->
-      peerConnection.connection.removeTrack(sender)
-    }
+    try {
+      // Clean up video tracks
+      remoteVideoTrackFlow.replayCache.forEach { it.dispose() }
 
-    // Clear the senders
-    localVideoSender = null
-    localAudioSender = null
+      // Remove tracks from peer connection
+      peerConnection?.connection?.let { connection ->
+        localVideoSender?.let { sender ->
+          connection.removeTrack(sender)
+        }
+        localAudioSender?.let { sender ->
+          connection.removeTrack(sender)
+        }
+      }
+
+      // Clear senders
+      localVideoSender = null
+      localAudioSender = null
+
+      // Close and clear peer connection
+      peerConnection?.connection?.close()
+      peerConnection = null
+
+      // Reset state
+      isCallSetupComplete = false
+
+    } catch (e: Exception) {
+      logger.e { "[cleanupCall] Error during cleanup: ${e.message}" }
+    }
   }
 
   override fun flipCamera() {
@@ -300,40 +375,20 @@ class WebRtcSessionManagerImpl(
 
   override fun disconnect() {
     _callStateFlow.value = CallState.Idle
-
-    // Clean up tracks
-    remoteVideoTrackFlow.replayCache.forEach { videoTrack ->
-      videoTrack.dispose()
-    }
-    localVideoTrackFlow.replayCache.forEach { videoTrack ->
-      videoTrack.dispose()
-    }
-    localAudioTrack.dispose()
-    localVideoTrack.dispose()
-
-    // Clean up senders
     cleanupCall()
-
-    // Clean up other resources
-    audioHandler.stop()
-    videoCapturer.stopCapture()
-    videoCapturer.dispose()
-
     signalingClient.dispose()
     sessionManagerScope.cancel()
   }
 
   private suspend fun sendOffer() {
+    logger.d { "[sendOffer] Creating and sending offer" }
     try {
-      val offer = peerConnection.createOffer().getOrThrow()
-      val result = peerConnection.setLocalDescription(offer)
-      result.onSuccess {
-        signalingClient.sendCommand(SignalingClient.SignalingCommand.OFFER, offer.description)
-      }.onFailure { error ->
-        _callStateFlow.value = CallState.Error("Failed to create offer: ${error.message}")
-        disconnect()
+      val offer = peerConnection?.createOffer()?.getOrThrow()
+      offer?.let { offerDes->
+        peerConnection?.setLocalDescription(offerDes)?.onSuccess {
+          signalingClient.sendCommand(SignalingClient.SignalingCommand.OFFER, offerDes.description)
+        }
       }
-      logger.d { "[SDP] send offer: ${offer.stringify()}" }
     } catch (e: Exception) {
       _callStateFlow.value = CallState.Error("Failed to create offer: ${e.message}")
       disconnect()
@@ -341,17 +396,16 @@ class WebRtcSessionManagerImpl(
   }
 
   private suspend fun sendAnswer() {
+    logger.d { "[sendAnswer] Creating and sending answer" }
     try {
-      val answer = peerConnection.createAnswer().getOrThrow()
-      val result = peerConnection.setLocalDescription(answer)
-      result.onSuccess {
-        signalingClient.sendCommand(SignalingClient.SignalingCommand.ANSWER, answer.description)
-      }.onFailure { error ->
-        _callStateFlow.value = CallState.Error("Failed to create answer: ${error.message}")
-        disconnect()
+      val answer = peerConnection?.createAnswer()?.getOrThrow()
+      answer?.let { answerDescription ->
+        peerConnection?.setLocalDescription(answerDescription)?.onSuccess {
+          signalingClient.sendCommand(SignalingClient.SignalingCommand.ANSWER, answerDescription.description)
+        }
       }
-      logger.d { "[SDP] send answer: ${answer.stringify()}" }
     } catch (e: Exception) {
+      logger.e { "[sendAnswer] Error: ${e.message}" }
       _callStateFlow.value = CallState.Error("Failed to create answer: ${e.message}")
       disconnect()
     }
@@ -360,7 +414,7 @@ class WebRtcSessionManagerImpl(
   private suspend fun handleOffer(sdp: String) {
     logger.d { "[SDP] handle offer: $sdp" }
     try {
-      peerConnection.setRemoteDescription(
+      peerConnection?.setRemoteDescription(
         SessionDescription(SessionDescription.Type.OFFER, sdp)
       )
       sendAnswer()
@@ -373,7 +427,7 @@ class WebRtcSessionManagerImpl(
   private suspend fun handleAnswer(sdp: String) {
     logger.d { "[SDP] handle answer: $sdp" }
     try {
-      peerConnection.setRemoteDescription(
+      peerConnection?.setRemoteDescription(
         SessionDescription(SessionDescription.Type.ANSWER, sdp)
       )
     } catch (e: Exception) {
@@ -385,7 +439,7 @@ class WebRtcSessionManagerImpl(
   private suspend fun handleIce(iceMessage: String) {
     try {
       val iceArray = iceMessage.split(SignalingClient.ICE_SEPARATOR)
-      peerConnection.addIceCandidate(
+      peerConnection?.addIceCandidate(
         IceCandidate(
           iceArray[0],
           iceArray[1].toInt(),

@@ -48,6 +48,7 @@ import androidx.compose.material.TextButton
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -64,6 +65,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import io.getstream.webrtc.sample.compose.ui.components.VideoRenderer
 import io.getstream.webrtc.sample.compose.ui.screens.video.CallAction
 import io.getstream.webrtc.sample.compose.ui.screens.video.FloatingVideoRenderer
@@ -75,6 +77,9 @@ import io.getstream.webrtc.sample.compose.webrtc.peer.StreamPeerConnectionFactor
 import io.getstream.webrtc.sample.compose.webrtc.sessions.LocalWebRtcSessionManager
 import io.getstream.webrtc.sample.compose.webrtc.sessions.WebRtcSessionManager
 import io.getstream.webrtc.sample.compose.webrtc.sessions.WebRtcSessionManagerImpl
+import org.webrtc.RendererCommon
+import org.webrtc.SurfaceViewRenderer
+import org.webrtc.VideoTrack
 
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -84,9 +89,9 @@ class MainActivity : ComponentActivity() {
 
     val sessionManager: WebRtcSessionManager = WebRtcSessionManagerImpl(
       context = this,
-      signalingClient = SignalingClient(userId = "1"),
-      peerConnectionFactory = StreamPeerConnectionFactory(this),
-      userId = "1"
+      signalingClient = SignalingClient(userId = "2"),
+      peerConnectionFactory = StreamPeerConnectionFactory(applicationContext),
+      userId = "2"
     )
 
     setContent {
@@ -97,12 +102,27 @@ class MainActivity : ComponentActivity() {
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colors.background
           ) {
-            TestCallScreen()
+            MainScreen()
           }
         }
       }
     }
 
+  }
+
+  @Composable
+  fun MainScreen() {
+    val sessionManager = LocalWebRtcSessionManager.current
+    val callState by sessionManager.callStateFlow.collectAsState()
+
+    when (callState) {
+      is WebRtcSessionManagerImpl.CallState.Connected -> {
+        VideoCallScreen()
+      }
+      else -> {
+        TestCallScreen()
+      }
+    }
   }
 
   @Composable
@@ -127,7 +147,6 @@ class MainActivity : ComponentActivity() {
       // Call Controls
       when (callState) {
         is WebRtcSessionManagerImpl.CallState.Idle -> {
-          // Input for target user ID
           OutlinedTextField(
             value = targetUserId,
             onValueChange = { targetUserId = it },
@@ -155,70 +174,29 @@ class MainActivity : ComponentActivity() {
           }
         }
 
-        is WebRtcSessionManagerImpl.CallState.Connected -> {
-          // Video Views
-          Box(modifier = Modifier.weight(1f)) {
-            val localVideoTrack by sessionManager.localVideoTrackFlow.collectAsState(null)
-            val remoteVideoTrack by sessionManager.remoteVideoTrackFlow.collectAsState(null)
-
-            // Remote video (main)
-            remoteVideoTrack?.let { track ->
-              VideoRenderer(
-                videoTrack = track,
-                modifier = Modifier.fillMaxSize()
-              )
-            }
-
-            // Local video (small overlay)
-            localVideoTrack?.let { track ->
-              VideoRenderer(
-                videoTrack = track,
-                modifier = Modifier
-                  .align(Alignment.TopEnd)
-                  .size(width = 120.dp, height = 160.dp)
-              )
-            }
+        is WebRtcSessionManagerImpl.CallState.OutgoingCall -> {
+          Text("Calling ${(callState as WebRtcSessionManagerImpl.CallState.OutgoingCall).remoteUserId}...")
+          Button(onClick = { sessionManager.disconnect() }) {
+            Text("Cancel")
           }
+        }
 
-          // Call Controls
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(8.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly
-          ) {
-            var isMicEnabled by remember { mutableStateOf(true) }
-            var isCameraEnabled by remember { mutableStateOf(true) }
+        is WebRtcSessionManagerImpl.CallState.Rejected -> {
+          Text("Call rejected")
+          Button(onClick = { sessionManager.disconnect() }) {
+            Text("OK")
+          }
+        }
 
-            Button(onClick = {
-              isMicEnabled = !isMicEnabled
-              sessionManager.enableMicrophone(isMicEnabled)
-            }) {
-              Text(if (isMicEnabled) "Mute" else "Unmute")
-            }
-
-            Button(onClick = {
-              isCameraEnabled = !isCameraEnabled
-              sessionManager.enableCamera(isCameraEnabled)
-            }) {
-              Text(if (isCameraEnabled) "Stop Camera" else "Start Camera")
-            }
-
-            Button(onClick = { sessionManager.flipCamera() }) {
-              Text("Flip")
-            }
-
-            Button(onClick = { sessionManager.disconnect() }) {
-              Text("End")
-            }
+        is WebRtcSessionManagerImpl.CallState.Error -> {
+          Text("Error: ${(callState as WebRtcSessionManagerImpl.CallState.Error).message}")
+          Button(onClick = { sessionManager.disconnect() }) {
+            Text("OK")
           }
         }
 
         else -> {
-          Text("Status: ${callState::class.simpleName}")
-          Button(onClick = { sessionManager.disconnect() }) {
-            Text("Reset")
-          }
+          // For other states, show nothing or a loading indicator
         }
       }
     }

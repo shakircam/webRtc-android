@@ -67,6 +67,7 @@ class SignalingClient(
   }
 
   fun acceptCall(callerId: String) {
+    logger.d { "[acceptCall] accepting call from $callerId" }
     sendCommand(SignalingCommand.CALL_RESPONSE, "accept $callerId")
   }
 
@@ -94,10 +95,18 @@ class SignalingClient(
           handleOnlineUsers(text)
         text.startsWith(SignalingCommand.INCOMING_CALL.toString(), true) ->
           handleIncomingCall(text)
-        text.startsWith(SignalingCommand.CALL_ACCEPTED.toString(), true) ->
-          handleCallResponse(text, true)
-        text.startsWith(SignalingCommand.CALL_REJECTED.toString(), true) ->
-          handleCallResponse(text, false)
+        text.startsWith(SignalingCommand.CALL_ACCEPTED.toString(), true) -> {
+          val remoteUserId = text.substringAfter("${SignalingCommand.CALL_ACCEPTED} ")
+          signalingScope.launch {
+            _callResponseFlow.emit(remoteUserId to true)
+          }
+        }
+        text.startsWith(SignalingCommand.CALL_REJECTED.toString(), true) -> {
+          val remoteUserId = text.substringAfter("${SignalingCommand.CALL_REJECTED} ")
+          signalingScope.launch {
+            _callResponseFlow.emit(remoteUserId to false)
+          }
+        }
         text.startsWith(SignalingCommand.OFFER.toString(), true) ->
           handleSignalingCommand(SignalingCommand.OFFER, text)
         text.startsWith(SignalingCommand.ANSWER.toString(), true) ->
