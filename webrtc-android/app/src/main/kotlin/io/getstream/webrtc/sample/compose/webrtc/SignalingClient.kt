@@ -89,7 +89,6 @@ class SignalingClient(private val callerId: String) {
 
   private fun handleSignalingCommand(command: SignalingCommand, text: String) {
    // val value = getSeparatedMessage(text)
-    logger.d { "[handleSignalingCommand] $command message: $text" }
     signalingScope.launch {
       _signalingCommandFlow.emit(command to text)
     }

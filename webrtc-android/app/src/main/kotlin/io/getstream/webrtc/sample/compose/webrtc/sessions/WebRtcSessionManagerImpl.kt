@@ -311,7 +311,7 @@ class WebRtcSessionManagerImpl(
       logger.d { "[Handle offer] for target userId: $targetUserId" }
       if (targetUserId == currentUserId) {  // `localUserId` should be a unique identifier for the device
         logger.d { "[Handle offer] offer: $offerDescription" }
-        offer = sdp
+        offer = offerDescription
         _sessionStateFlow.value = WebRTCSessionState.Answer
       } else {
         logger.d { "[Handle offer] received for different user, ignoring." }

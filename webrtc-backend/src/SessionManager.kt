@@ -39,14 +39,6 @@ object SessionManager {
         }
     }
 
-    private fun handleState(message: String) {
-        // Extract source ID from message
-        val content = message.substringAfter(' ')
-        val sourceId = content.split(" ")[0]
-        sessionManagerScope.launch {
-            clients[sourceId]?.send("${MessageType.STATE} $sessionState")
-        }
-    }
 
     private fun handleOffer(senderId: String, message: String) {
         try {
@@ -63,7 +55,7 @@ object SessionManager {
             println("Handling offer from $senderId to $targetId")
 
             // Forward offer to target client
-            clients[targetId]?.send("${MessageType.OFFER} $message")
+            clients[targetId]?.send(MessageType.OFFER.toString() + " " + offerDescription)
         } catch (e: Exception) {
             println("Error handling offer from $senderId: ${e.message}")
         }
@@ -84,7 +76,7 @@ object SessionManager {
             println("Handling answer from $senderId to $targetId")
 
             // Forward answer to target client
-            clients[targetId]?.send("${MessageType.ANSWER} $senderId $message")
+            clients[targetId]?.send(MessageType.ANSWER.toString() + " " + answerDescription)
         } catch (e: Exception) {
             println("Error handling answer from $senderId: ${e.message}")
         }
@@ -100,12 +92,11 @@ object SessionManager {
             }
 
             val targetId = iceParts[0]
-            val iceContent = iceParts.drop(1).joinToString("$")
 
             println("Handling ICE from $senderId to $targetId")
 
             // Forward ICE to target client with sender ID
-            clients[targetId]?.send("${MessageType.ICE} $message")
+            clients[targetId]?.send(MessageType.ICE.toString() + " " + message)
         } catch (e: Exception) {
             println("Error handling ICE from $senderId: ${e.message}")
         }
