@@ -70,7 +70,7 @@ class WebRtcSessionManagerImpl(
   override val peerConnectionFactory: StreamPeerConnectionFactory
 ) : WebRtcSessionManager {
   private val logger by taggedLogger("Call:LocalWebRtcSessionManager")
-
+  private var remoteUserId: String? = null
   private val sessionManagerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
   // session flow to send information about the session state to the subscribers
@@ -171,7 +171,9 @@ class WebRtcSessionManagerImpl(
       type = StreamPeerType.SUBSCRIBER,
       mediaConstraints = mediaConstraints,
       onIceCandidateRequest = { iceCandidate, _ ->
-        val iceMessage = "$currentUserId$ICE_SEPARATOR${iceCandidate.sdpMid}$ICE_SEPARATOR${iceCandidate.sdpMLineIndex}$ICE_SEPARATOR${iceCandidate.sdp}"
+        // Include target user ID in ICE message
+        val targetId = if (currentUserId == calleeId) currentUserId else calleeId
+        val iceMessage = "$targetId$ICE_SEPARATOR${iceCandidate.sdpMid}$ICE_SEPARATOR${iceCandidate.sdpMLineIndex}$ICE_SEPARATOR${iceCandidate.sdp}"
         signalingClient.sendCommand(
           SignalingCommand.ICE,
           iceMessage)
@@ -262,15 +264,12 @@ class WebRtcSessionManagerImpl(
   }
 
   private suspend fun sendOffer(calleeId: String) {
-    try {
-      val offer = peerConnection.createOffer().getOrThrow()
-      peerConnection.setLocalDescription(offer).onSuccess {
-        val message = "$calleeId ${offer.description}"
-        signalingClient.sendCommand(SignalingCommand.OFFER, message)
-        logger.d { "[sendOffer] Offer sent to $calleeId" }
-      }
-    } catch (e: Exception) {
-      logger.e { "[sendOffer] Failed to send offer: ${e.message}" }
+    val offer = peerConnection.createOffer().getOrThrow()
+    val result = peerConnection.setLocalDescription(offer)
+    result.onSuccess {
+      // When sending offer, we use calleeId as target
+      val message = "$calleeId ${offer.description}"
+      signalingClient.sendCommand(SignalingCommand.OFFER, message )
     }
   }
 
@@ -281,21 +280,22 @@ class WebRtcSessionManagerImpl(
         return
       }
 
-      peerConnection.setRemoteDescription(
-        SessionDescription(SessionDescription.Type.OFFER, offer!!)
-      ).onSuccess {
-        logger.d { "[sendAnswer] Remote description set" }
+      val offerComponents = offer!!.split(" ", limit = 2)
+      val callerId = if (currentUserId == calleeId) currentUserId else calleeId
 
-        peerConnection.createAnswer().getOrThrow().let { answer ->
-          peerConnection.setLocalDescription(answer).onSuccess {
-            val message = "$currentUserId ${answer.description}"
-            signalingClient.sendCommand(SignalingCommand.ANSWER, message)
-            logger.d { "[sendAnswer] Answer sent" }
-          }
+      peerConnection.setRemoteDescription(
+        SessionDescription(SessionDescription.Type.OFFER, offerComponents[1])
+      ).onSuccess {
+        val answer = peerConnection.createAnswer().getOrThrow()
+        peerConnection.setLocalDescription(answer).onSuccess {
+          // Format: callerId sdpDescription
+          val message = "$callerId ${answer.description}"
+          logger.d { "[sendAnswer] Sending answer to $callerId" }
+          signalingClient.sendCommand(SignalingCommand.ANSWER, message)
         }
       }
     } catch (e: Exception) {
-      logger.e { "[sendAnswer] Failed to send answer: ${e.message}" }
+      logger.e { "[sendAnswer] Error: ${e.message}" }
     }
   }
 
@@ -311,7 +311,7 @@ class WebRtcSessionManagerImpl(
       logger.d { "[Handle offer] for target userId: $targetUserId" }
       if (targetUserId == currentUserId) {  // `localUserId` should be a unique identifier for the device
         logger.d { "[Handle offer] offer: $offerDescription" }
-        offer = offerDescription
+        offer = sdp
         _sessionStateFlow.value = WebRTCSessionState.Answer
       } else {
         logger.d { "[Handle offer] received for different user, ignoring." }
@@ -332,10 +332,11 @@ class WebRtcSessionManagerImpl(
       val sourceUserId = components[0]
       val answerDescription = components[1]
 
-      logger.d { "[handleAnswer] Processing answer from $sourceUserId" }
-      peerConnection.setRemoteDescription(
-        SessionDescription(SessionDescription.Type.ANSWER, answerDescription)
-      )
+        logger.d { "[handleAnswer] Processing answer from $sourceUserId" }
+        peerConnection.setRemoteDescription(
+          SessionDescription(SessionDescription.Type.ANSWER, answerDescription)
+        )
+
     } catch (e: Exception) {
       logger.e { "[handleAnswer] Error handling answer: ${e.message}" }
     }
@@ -348,19 +349,17 @@ class WebRtcSessionManagerImpl(
         logger.e { "[handleIce] Invalid ICE format: $iceMessage" }
         return
       }
-      val targetUserId = iceArray[0] // Extract the target user ID
-      if (targetUserId != currentUserId) {
-        logger.d { "[handleIce] Ignoring ICE for user $targetUserId" }
-        return
-      }
-      val sdpMid = iceArray[1]
-      val sdpMLineIndex = iceArray[2].toInt()
-      val candidate = iceArray[3]
+      val sourceUserId = iceArray[0] // Extract the source user ID
 
-      logger.d { "[handleIce] Adding ICE candidate" }
-      peerConnection.addIceCandidate(
-        IceCandidate(sdpMid, sdpMLineIndex, candidate)
-      )
+        val sdpMid = iceArray[1]
+        val sdpMLineIndex = iceArray[2].toInt()
+        val candidate = iceArray[3]
+
+        logger.d { "[handleIce] Adding ICE candidate from $sourceUserId" }
+        peerConnection.addIceCandidate(
+          IceCandidate(sdpMid, sdpMLineIndex, candidate)
+        )
+
     } catch (e: Exception) {
       logger.e { "[handleIce] Error handling ICE candidate: ${e.message}" }
     }

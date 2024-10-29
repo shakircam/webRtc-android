@@ -30,32 +30,31 @@ fun Application.module(testing: Boolean = false) {
         get("/") {
             call.respond("Hello from WebRTC signaling server")
         }
-        webSocket("/rtc/{callerId}/{calleeId}") {
+        webSocket("/rtc/{userId}") {
            // val sessionID = UUID.randomUUID()
-            val callerId : String = (call.parameters["callerId"] ?: 0).toString()
-            val calleeId : String = (call.parameters["calleeId"] ?: 0).toString()
-            log.info("onSessionConnect userId = $callerId")
+            val userId : String = (call.parameters["userId"] ?: 0).toString()
+            log.info("onSessionConnect userId = $userId")
             try {
-                SessionManager.onSessionStarted(callerId, this)
+                SessionManager.onSessionStarted(userId, this)
 
                 for (frame in incoming) {
                     when (frame) {
                         is Frame.Text -> {
                            // log.info("onMessage coming from client $callerId $frame")
-                            SessionManager.onMessage(frame.readText())
+                            SessionManager.onMessage(userId,frame.readText())
                         }
 
                         else -> Unit
                     }
                 }
-                log.info("Exiting incoming loop, closing session: $callerId")
-                SessionManager.onSessionClose(callerId,calleeId)
+                log.info("Exiting incoming loop, closing session: $userId")
+                SessionManager.onSessionClose(userId)
             } catch (e: ClosedReceiveChannelException) {
-                log.error("onClose $callerId")
-                SessionManager.onSessionClose(callerId,calleeId)
+                log.error("onClose $userId")
+                SessionManager.onSessionClose(userId)
             } catch (e: Throwable) {
-                log.error("onError $callerId $e")
-                SessionManager.onSessionClose(callerId,calleeId)
+                log.error("onError $userId $e")
+                SessionManager.onSessionClose(userId)
             }
         }
     }

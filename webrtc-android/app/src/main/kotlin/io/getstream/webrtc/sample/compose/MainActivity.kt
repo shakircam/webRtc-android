@@ -49,7 +49,7 @@ class MainActivity : ComponentActivity() {
       context = this,
       currentUserId = "2",
       calleeId = "1",
-      signalingClient = SignalingClient(callerId = "2", calleeId = "1"),
+      signalingClient = SignalingClient(callerId = "2"),
       peerConnectionFactory = StreamPeerConnectionFactory(this)
     )
 

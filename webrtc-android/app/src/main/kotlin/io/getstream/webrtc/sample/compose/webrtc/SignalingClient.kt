@@ -33,13 +33,15 @@ import okhttp3.Request
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 
-class SignalingClient(callerId: String, calleeId: String ) {
+private const val ICE_SEPARATOR = '$'
+
+class SignalingClient(private val callerId: String) {
   private val logger by taggedLogger("Call:SignalingClient")
   private val signalingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private val client = OkHttpClient()
   private val request = Request
     .Builder()
-    .url("${BuildConfig.SIGNALING_SERVER_IP_ADDRESS}/$callerId/$calleeId")
+    .url("${BuildConfig.SIGNALING_SERVER_IP_ADDRESS}/$callerId")
     .build()
 
   // opening web socket with signaling server
@@ -71,15 +73,15 @@ class SignalingClient(callerId: String, calleeId: String ) {
         }
         text.startsWith(SignalingCommand.OFFER.toString(), true) -> {
           val content = text.substringAfter(' ')
-          handleSignalingCommand(SignalingCommand.OFFER, content)
+            handleSignalingCommand(SignalingCommand.OFFER, content)
         }
         text.startsWith(SignalingCommand.ANSWER.toString(), true) -> {
           val content = text.substringAfter(' ')
-          handleSignalingCommand(SignalingCommand.ANSWER, content)
+            handleSignalingCommand(SignalingCommand.ANSWER, content)
         }
         text.startsWith(SignalingCommand.ICE.toString(), true) -> {
           val content = text.substringAfter(' ')
-          handleSignalingCommand(SignalingCommand.ICE, content)
+            handleSignalingCommand(SignalingCommand.ICE, content)
         }
       }
     }
