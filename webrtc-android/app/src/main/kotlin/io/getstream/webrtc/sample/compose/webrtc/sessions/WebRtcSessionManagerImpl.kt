@@ -287,7 +287,7 @@ class WebRtcSessionManagerImpl(
 
   private suspend fun handleIce(iceMessage: String) {
     val iceArray = iceMessage.split(ICE_SEPARATOR)
-    logger.d { "[ICE] target user: ${iceArray[0]}; message: ${iceMessage}"}
+    logger.d { "[ICE] target user: ${iceArray[0]}; message part 1: ${iceArray[1]} message part 2: ${iceArray[2]} message part 3: ${iceArray[3]}"}
     peerConnection.addIceCandidate(
       IceCandidate(
         iceArray[1],
