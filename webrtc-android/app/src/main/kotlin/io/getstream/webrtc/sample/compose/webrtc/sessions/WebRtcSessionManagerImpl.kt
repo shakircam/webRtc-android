@@ -64,6 +64,8 @@ val LocalWebRtcSessionManager: ProvidableCompositionLocal<WebRtcSessionManager> 
 
 class WebRtcSessionManagerImpl(
   private val context: Context,
+  private val calleeId : String,
+  private val currentUserId : String,
   override val signalingClient: SignalingClient,
   override val peerConnectionFactory: StreamPeerConnectionFactory
 ) : WebRtcSessionManager {
@@ -162,10 +164,11 @@ class WebRtcSessionManagerImpl(
       type = StreamPeerType.SUBSCRIBER,
       mediaConstraints = mediaConstraints,
       onIceCandidateRequest = { iceCandidate, _ ->
+        val targetId = calleeId // for now keep simple
+        val iceMessage = "$targetId$ICE_SEPARATOR${iceCandidate.sdpMid}$ICE_SEPARATOR${iceCandidate.sdpMLineIndex}$ICE_SEPARATOR${iceCandidate.sdp}"
+        logger.d { "[ICE] Sending ICE to $targetId: $iceMessage" }
         signalingClient.sendCommand(
-          SignalingCommand.ICE,
-          "${iceCandidate.sdpMid}$ICE_SEPARATOR${iceCandidate.sdpMLineIndex}$ICE_SEPARATOR${iceCandidate.sdp}"
-        )
+          SignalingCommand.ICE,iceMessage)
       },
       onVideoTrack = { rtpTransceiver ->
         val track = rtpTransceiver?.receiver?.track() ?: return@makePeerConnection
@@ -249,19 +252,22 @@ class WebRtcSessionManagerImpl(
     val offer = peerConnection.createOffer().getOrThrow()
     val result = peerConnection.setLocalDescription(offer)
     result.onSuccess {
-      signalingClient.sendCommand(SignalingCommand.OFFER, offer.description)
+      val message = "$calleeId$${offer.description}"
+      signalingClient.sendCommand(SignalingCommand.OFFER, message)
     }
     logger.d { "[SDP] send offer: ${offer.stringify()}" }
   }
 
   private suspend fun sendAnswer() {
+    val offerSdp = offer!!.split(ICE_SEPARATOR)
     peerConnection.setRemoteDescription(
-      SessionDescription(SessionDescription.Type.OFFER, offer)
+      SessionDescription(SessionDescription.Type.OFFER, offerSdp[1])
     )
     val answer = peerConnection.createAnswer().getOrThrow()
     val result = peerConnection.setLocalDescription(answer)
     result.onSuccess {
-      signalingClient.sendCommand(SignalingCommand.ANSWER, answer.description)
+      val message = "$currentUserId$${answer.description}"
+      signalingClient.sendCommand(SignalingCommand.ANSWER, message)
     }
     logger.d { "[SDP] send answer: ${answer.stringify()}" }
   }
@@ -272,19 +278,21 @@ class WebRtcSessionManagerImpl(
   }
 
   private suspend fun handleAnswer(sdp: String) {
-    logger.d { "[SDP] handle answer: $sdp" }
+    val parts = sdp.split(ICE_SEPARATOR)
+    logger.d { "[SDP] handle answer: ${parts[1]}" }
     peerConnection.setRemoteDescription(
-      SessionDescription(SessionDescription.Type.ANSWER, sdp)
+      SessionDescription(SessionDescription.Type.ANSWER, parts[1])
     )
   }
 
   private suspend fun handleIce(iceMessage: String) {
     val iceArray = iceMessage.split(ICE_SEPARATOR)
+    logger.d { "[ICE] target user: ${iceArray[0]}; message: ${iceMessage}"}
     peerConnection.addIceCandidate(
       IceCandidate(
-        iceArray[0],
-        iceArray[1].toInt(),
-        iceArray[2]
+        iceArray[1],
+        iceArray[2].toInt(),
+        iceArray[3]
       )
     )
   }
