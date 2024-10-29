@@ -191,11 +191,12 @@ class WebRtcSessionManagerImpl(
   init {
     sessionManagerScope.launch {
       signalingClient.signalingCommandFlow
-        .collect { commandToValue ->
-          when (commandToValue.first) {
-            SignalingCommand.OFFER -> handleOffer(commandToValue.second)
-            SignalingCommand.ANSWER -> handleAnswer(commandToValue.second)
-            SignalingCommand.ICE -> handleIce(commandToValue.second)
+        .collect { (command, message) ->
+          logger.d { "[SignalingFlow] Received $command with message: $message" }
+          when (command) {
+            SignalingCommand.OFFER -> handleOffer(message)
+            SignalingCommand.ANSWER -> handleAnswer(message)
+            SignalingCommand.ICE -> handleIce(message)
             else -> Unit
           }
         }
@@ -208,13 +209,18 @@ class WebRtcSessionManagerImpl(
     peerConnection.connection.addTrack(localAudioTrack)
     sessionManagerScope.launch {
       // sending local video track to show local video from start
-      _localVideoTrackFlow.emit(localVideoTrack)
+      try {
+        _localVideoTrackFlow.emit(localVideoTrack)
 
-      if (offer != null) {
-        sendAnswer()
-      } else {
-        logger.d { "Calling to start" }
-        sendOffer(calleeId)
+        if (offer != null) {
+          logger.d { "[onSessionScreenReady] Received offer, sending answer" }
+          sendAnswer()
+        } else {
+          logger.d { "[onSessionScreenReady] Initiating call to $calleeId" }
+          sendOffer(calleeId)
+        }
+      } catch (e:Exception){
+        logger.e { "[onSessionScreenReady] Error: ${e.message}" }
       }
     }
   }
@@ -255,83 +261,109 @@ class WebRtcSessionManagerImpl(
     signalingClient.dispose()
   }
 
-  private suspend fun sendOffer(calleeId : String) {
-    val offer = peerConnection.createOffer().getOrThrow()
-    val result = peerConnection.setLocalDescription(offer)
-    val message = "$calleeId ${offer.description}"
-    result.onSuccess {
-      signalingClient.sendCommand(SignalingCommand.OFFER, message)
+  private suspend fun sendOffer(calleeId: String) {
+    try {
+      val offer = peerConnection.createOffer().getOrThrow()
+      peerConnection.setLocalDescription(offer).onSuccess {
+        val message = "$calleeId ${offer.description}"
+        signalingClient.sendCommand(SignalingCommand.OFFER, message)
+        logger.d { "[sendOffer] Offer sent to $calleeId" }
+      }
+    } catch (e: Exception) {
+      logger.e { "[sendOffer] Failed to send offer: ${e.message}" }
     }
-    logger.d { "[SDP] send offer: ${offer.stringify()}" }
   }
 
   private suspend fun sendAnswer() {
-    peerConnection.setRemoteDescription(
-      SessionDescription(SessionDescription.Type.OFFER, offer)
-    )
-    val answer = peerConnection.createAnswer().getOrThrow()
-    val result = peerConnection.setLocalDescription(answer)
-    val message = "$currentUserId ${answer.description}"
-    result.onSuccess {
-      signalingClient.sendCommand(SignalingCommand.ANSWER, message)
+    try {
+      if (offer == null) {
+        logger.e { "[sendAnswer] No offer to answer" }
+        return
+      }
+
+      peerConnection.setRemoteDescription(
+        SessionDescription(SessionDescription.Type.OFFER, offer!!)
+      ).onSuccess {
+        logger.d { "[sendAnswer] Remote description set" }
+
+        peerConnection.createAnswer().getOrThrow().let { answer ->
+          peerConnection.setLocalDescription(answer).onSuccess {
+            val message = "$currentUserId ${answer.description}"
+            signalingClient.sendCommand(SignalingCommand.ANSWER, message)
+            logger.d { "[sendAnswer] Answer sent" }
+          }
+        }
+      }
+    } catch (e: Exception) {
+      logger.e { "[sendAnswer] Failed to send answer: ${e.message}" }
     }
-   // logger.d { "[SDP] send answer: ${answer.stringify()}" }
   }
 
   private fun handleOffer(sdp: String) {
-    val components = sdp.split(" ", limit = 2)
-    val targetUserId = components[0]
-    val offerDescription = components[1]
-    logger.d { "[SDP] handle offer for target userId: $targetUserId" }
-    if (targetUserId == currentUserId) {  // `localUserId` should be a unique identifier for the device
-      logger.d { "[SDP] handle offer: $offerDescription" }
-      offer = offerDescription
-
-      val state = getSeparatedMessage(WebRTCSessionState.Answer.toString())
-      logger.d { "received state message: $state" }
-       _sessionStateFlow.value = WebRTCSessionState.valueOf(state)
-
-    } else {
-      logger.d { "[SDP] offer received for different user, ignoring." }
+    try {
+      val components = sdp.split(" ", limit = 2)
+      if (components.size != 2) {
+        logger.e { "[handleOffer] Invalid offer format: $sdp" }
+        return
+      }
+      val targetUserId = components[0]
+      val offerDescription = components[1]
+      logger.d { "[Handle offer] for target userId: $targetUserId" }
+      if (targetUserId == currentUserId) {  // `localUserId` should be a unique identifier for the device
+        logger.d { "[Handle offer] offer: $offerDescription" }
+        offer = offerDescription
+        _sessionStateFlow.value = WebRTCSessionState.Answer
+      } else {
+        logger.d { "[Handle offer] received for different user, ignoring." }
+      }
+    } catch (e:Exception){
+      logger.e { "[Handle offer] error handling offer: ${e.message}" }
     }
-//      logger.d { "[SDP] handle offer: $sdp calleeId $calleeId" }
-//      offer = sdp
   }
 
-  private fun getSeparatedMessage(text: String) = text.substringAfter(' ')
-
   private suspend fun handleAnswer(sdp: String) {
-    logger.d { "[SDP] handle answer: $sdp" }
-    val components = sdp.split(" ", limit = 2)
-    val answerDescription = components[1]
+    try {
+      val components = sdp.split(" ", limit = 2)
+      if (components.size != 2) {
+        logger.e { "[handleAnswer] Invalid answer format: $sdp" }
+        return
+      }
+
+      val sourceUserId = components[0]
+      val answerDescription = components[1]
+
+      logger.d { "[handleAnswer] Processing answer from $sourceUserId" }
       peerConnection.setRemoteDescription(
         SessionDescription(SessionDescription.Type.ANSWER, answerDescription)
       )
+    } catch (e: Exception) {
+      logger.e { "[handleAnswer] Error handling answer: ${e.message}" }
+    }
   }
 
   private suspend fun handleIce(iceMessage: String) {
+    try {
       val iceArray = iceMessage.split(ICE_SEPARATOR)
-    val targetUserId = iceArray[0] // Extract the target user ID
-    val sdpMid = iceArray[1]
-    val sdpMLineIndex = iceArray[2].toInt()
-    val candidate = iceArray[3]
-    logger.d { "[ICE] ICE candidate targetUser $targetUserId" }
-    // Ensure ICE candidate is processed only if it's for the current user
-    if (targetUserId == currentUserId) {
+      if (iceArray.size != 4) {
+        logger.e { "[handleIce] Invalid ICE format: $iceMessage" }
+        return
+      }
+      val targetUserId = iceArray[0] // Extract the target user ID
+      if (targetUserId != currentUserId) {
+        logger.d { "[handleIce] Ignoring ICE for user $targetUserId" }
+        return
+      }
+      val sdpMid = iceArray[1]
+      val sdpMLineIndex = iceArray[2].toInt()
+      val candidate = iceArray[3]
+
+      logger.d { "[handleIce] Adding ICE candidate" }
       peerConnection.addIceCandidate(
         IceCandidate(sdpMid, sdpMLineIndex, candidate)
       )
-    } else {
-      logger.d { "[ICE] ICE candidate for different user, ignoring." }
+    } catch (e: Exception) {
+      logger.e { "[handleIce] Error handling ICE candidate: ${e.message}" }
     }
-//      peerConnection.addIceCandidate(
-//        IceCandidate(
-//          iceArray[0],
-//          iceArray[1].toInt(),
-//          iceArray[2]
-//        )
-//      )
-
   }
 
   private fun buildCameraCapturer(): VideoCapturer {

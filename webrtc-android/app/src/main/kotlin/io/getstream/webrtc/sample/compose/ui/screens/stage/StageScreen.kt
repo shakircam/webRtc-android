@@ -43,14 +43,6 @@ fun StageScreen(
     var enabledCall by remember { mutableStateOf(true) }
 
     val text = when (state) {
-//      WebRTCSessionState.Offline -> {
-//        enabledCall = false
-//        stringResource(id = R.string.button_start_session)
-//      }
-//      WebRTCSessionState.Impossible -> {
-//        enabledCall = false
-//        stringResource(id = R.string.session_impossible)
-//      }
       WebRTCSessionState.Calling -> {
         enabledCall = true
         stringResource(id = R.string.button_start_call)
@@ -59,10 +51,6 @@ fun StageScreen(
         enabledCall = true
         stringResource(id = R.string.button_accept_call)
       }
-//      WebRTCSessionState.Active -> {
-//        enabledCall = false
-//        stringResource(id = R.string.session_active)
-//      }
     }
 
     Button(

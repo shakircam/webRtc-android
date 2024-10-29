@@ -21,18 +21,8 @@ object SessionManager {
     fun onSessionStarted(userId: String, session: DefaultWebSocketServerSession) {
         sessionManagerScope.launch {
             mutex.withLock {
-//                if (clients.size > 1) {
-//                    sessionManagerScope.launch(NonCancellable) {
-//                        session.send(Frame.Close()) // only two peers are supported
-//                    }
-//                    return@launch
-//                }
                 clients[userId] = session
                 session.send("Added as a client: $userId")
-//                if (clients.size > 1) {
-//                    sessionState = WebRTCSessionState.Ready
-//                }
-//                notifyAboutStateUpdate()
             }
         }
     }
@@ -59,14 +49,6 @@ object SessionManager {
 
 
     private fun handleOffer(targetUserId: String, message: String) {
-//        if (sessionState != WebRTCSessionState.Ready) {
-//            error("Session should be in Ready state to handle offer")
-//        }
-//        sessionState = WebRTCSessionState.Creating
-//        println("handling remote offer from user $userId message $message")
-//        notifyAboutStateUpdate()
-//        val clientToSendOffer = clients.filterKeys { it != userId }.values.first()
-//        clientToSendOffer.send(message)
 
         sessionManagerScope.launch {
             println("send offer to $targetUserId")
@@ -76,14 +58,6 @@ object SessionManager {
 
 
     private fun handleAnswer(targetUserId: String, message: String) {
-//        if (sessionState != WebRTCSessionState.Creating) {
-//            error("Session should be in Creating state to handle answer")
-//        }
-//        println("handling remote answer from $userId ")
-//        val clientToSendAnswer = clients.filterKeys { it != userId }.values.first()
-//        clientToSendAnswer.send(message)
-//        sessionState = WebRTCSessionState.Active
-//        notifyAboutStateUpdate()
         sessionManagerScope.launch {
             println("send answer to $targetUserId")
             clients[targetUserId]?.send(message)
@@ -111,11 +85,7 @@ object SessionManager {
 
     enum class WebRTCSessionState {
         Calling,
-        Answer,
-//        Active, // Offer and Answer messages has been sent
-//        Creating, // Creating session, offer has been sent
-//        Ready, // Both clients available and ready to initiate session
-//        Impossible // We have less than two clients
+        Answer
     }
 
     enum class MessageType {
@@ -124,19 +94,6 @@ object SessionManager {
         ANSWER,
         ICE
     }
-
-//    private fun notifyAboutStateUpdate(senderId: String, receiverId: String) {
-//        val stateMessage = "${MessageType.STATE} $sessionState"
-//
-//        // Send state update to the sender
-//        clients[senderId]?.send(stateMessage)
-//
-//        // Send state update to the receiver
-//        clients[receiverId]?.send(stateMessage)
-////        clients.forEach { (_, client) ->
-////            client.send("${MessageType.STATE} $sessionState")
-////        }
-//    }
 
     private fun DefaultWebSocketServerSession.send(message: String) {
         sessionManagerScope.launch {
