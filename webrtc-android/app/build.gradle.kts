@@ -72,4 +72,5 @@ dependencies {
 
   // logger
   implementation(libs.stream.log)
+  implementation(libs.androidx.material3.android)
 }

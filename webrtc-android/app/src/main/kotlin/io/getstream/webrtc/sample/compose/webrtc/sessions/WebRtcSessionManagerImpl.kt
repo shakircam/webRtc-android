@@ -28,8 +28,6 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.core.content.getSystemService
 import io.getstream.log.taggedLogger
 import io.getstream.webrtc.sample.compose.webrtc.SignalingClient
-import io.getstream.webrtc.sample.compose.webrtc.SignalingCommand
-import io.getstream.webrtc.sample.compose.webrtc.WebRTCSessionState
 import io.getstream.webrtc.sample.compose.webrtc.audio.AudioHandler
 import io.getstream.webrtc.sample.compose.webrtc.audio.AudioSwitchHandler
 import io.getstream.webrtc.sample.compose.webrtc.peer.StreamPeerConnection
@@ -39,6 +37,7 @@ import io.getstream.webrtc.sample.compose.webrtc.utils.stringify
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -51,6 +50,7 @@ import org.webrtc.CameraEnumerationAndroid
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.MediaStreamTrack
+import org.webrtc.RtpSender
 import org.webrtc.SessionDescription
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoCapturer
@@ -64,23 +64,29 @@ val LocalWebRtcSessionManager: ProvidableCompositionLocal<WebRtcSessionManager> 
 
 class WebRtcSessionManagerImpl(
   private val context: Context,
+  private val userId: String,
   override val signalingClient: SignalingClient,
   override val peerConnectionFactory: StreamPeerConnectionFactory
 ) : WebRtcSessionManager {
   private val logger by taggedLogger("Call:LocalWebRtcSessionManager")
-
   private val sessionManagerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-  // used to send local video track to the fragment
+  private val _availableUsersFlow = MutableStateFlow<List<String>>(emptyList())
+  override val availableUsersFlow: StateFlow<List<String>> = _availableUsersFlow
+
+  private val _callStateFlow = MutableStateFlow<CallState>(CallState.Idle)
+  override val callStateFlow: StateFlow<CallState> = _callStateFlow
+
+  // Store RtpSenders when adding tracks
+  private var localVideoSender: RtpSender? = null
+  private var localAudioSender: RtpSender? = null
+
   private val _localVideoTrackFlow = MutableSharedFlow<VideoTrack>()
   override val localVideoTrackFlow: SharedFlow<VideoTrack> = _localVideoTrackFlow
 
-  // used to send remote video track to the sender
   private val _remoteVideoTrackFlow = MutableSharedFlow<VideoTrack>()
   override val remoteVideoTrackFlow: SharedFlow<VideoTrack> = _remoteVideoTrackFlow
 
-  // declaring video constraints and setting OfferToReceiveVideo to true
-  // this step is mandatory to create valid offer and answer
   private val mediaConstraints = MediaConstraints().apply {
     mandatory.addAll(
       listOf(
@@ -90,7 +96,6 @@ class WebRtcSessionManagerImpl(
     )
   }
 
-  // getting front camera
   private val videoCapturer: VideoCapturer by lazy { buildCameraCapturer() }
   private val cameraManager by lazy { context.getSystemService<CameraManager>() }
   private val cameraEnumerator: Camera2Enumerator by lazy {
@@ -105,10 +110,9 @@ class WebRtcSessionManagerImpl(
       val supportedFormats = cameraEnumerator.getSupportedFormats(frontCamera) ?: emptyList()
       return supportedFormats.firstOrNull {
         (it.width == 720 || it.width == 480 || it.width == 360)
-      } ?: error("There is no matched resolution!")
+      } ?: error("No supported resolution found!")
     }
 
-  // we need it to initialize video capturer
   private val surfaceTextureHelper = SurfaceTextureHelper.create(
     "SurfaceTextureHelperThread",
     peerConnectionFactory.eglBaseContext
@@ -127,8 +131,6 @@ class WebRtcSessionManagerImpl(
       trackId = "Video${UUID.randomUUID()}"
     )
   }
-
-  /** Audio properties */
 
   private val audioHandler: AudioHandler by lazy {
     AudioSwitchHandler(context)
@@ -153,8 +155,6 @@ class WebRtcSessionManagerImpl(
     )
   }
 
-  private var offer: String? = null
-
   private val peerConnection: StreamPeerConnection by lazy {
     peerConnectionFactory.makePeerConnection(
       coroutineScope = sessionManagerScope,
@@ -163,8 +163,8 @@ class WebRtcSessionManagerImpl(
       mediaConstraints = mediaConstraints,
       onIceCandidateRequest = { iceCandidate, _ ->
         signalingClient.sendCommand(
-          SignalingCommand.ICE,
-          "${iceCandidate.sdpMid}$ICE_SEPARATOR${iceCandidate.sdpMLineIndex}$ICE_SEPARATOR${iceCandidate.sdp}"
+          SignalingClient.SignalingCommand.ICE,
+          "${iceCandidate.sdpMid}${SignalingClient.ICE_SEPARATOR}${iceCandidate.sdpMLineIndex}${SignalingClient.ICE_SEPARATOR}${iceCandidate.sdp}"
         )
       },
       onVideoTrack = { rtpTransceiver ->
@@ -180,33 +180,106 @@ class WebRtcSessionManagerImpl(
   }
 
   init {
+    // Monitor online users
+    sessionManagerScope.launch {
+      signalingClient.onlineUsersFlow.collect { users ->
+        _availableUsersFlow.value = users
+      }
+    }
+
+    // Monitor incoming calls
+    sessionManagerScope.launch {
+      signalingClient.incomingCallFlow.collect { callerId ->
+        _callStateFlow.value = CallState.IncomingCall(callerId)
+      }
+    }
+
+    // Monitor call responses
+    sessionManagerScope.launch {
+      signalingClient.callResponseFlow.collect { (remoteUserId, accepted) ->
+        if (accepted) {
+          _callStateFlow.value = CallState.Connected(remoteUserId)
+          setupCall()
+        } else {
+          _callStateFlow.value = CallState.Rejected(remoteUserId)
+          cleanupCall()
+        }
+      }
+    }
+
+    // Monitor signaling commands
     sessionManagerScope.launch {
       signalingClient.signalingCommandFlow
         .collect { commandToValue ->
           when (commandToValue.first) {
-            SignalingCommand.OFFER -> handleOffer(commandToValue.second)
-            SignalingCommand.ANSWER -> handleAnswer(commandToValue.second)
-            SignalingCommand.ICE -> handleIce(commandToValue.second)
+            SignalingClient.SignalingCommand.OFFER -> handleOffer(commandToValue.second)
+            SignalingClient.SignalingCommand.ANSWER -> handleAnswer(commandToValue.second)
+            SignalingClient.SignalingCommand.ICE -> handleIce(commandToValue.second)
             else -> Unit
           }
         }
     }
   }
 
+  override fun startCall(targetUserId: String) {
+    _callStateFlow.value = CallState.OutgoingCall(targetUserId)
+    signalingClient.initiateCall(targetUserId)
+  }
+
+  override fun acceptIncomingCall() {
+    val currentState = _callStateFlow.value as? CallState.IncomingCall ?: return
+    signalingClient.acceptCall(currentState.remoteUserId)
+    _callStateFlow.value = CallState.Connected(currentState.remoteUserId)
+    setupCall()
+  }
+
+  override fun rejectIncomingCall() {
+    val currentState = _callStateFlow.value as? CallState.IncomingCall ?: return
+    signalingClient.rejectCall(currentState.remoteUserId)
+    _callStateFlow.value = CallState.Idle
+    cleanupCall()
+  }
+
   override fun onSessionScreenReady() {
+    if (_callStateFlow.value is CallState.Connected) {
+      setupCall()
+    }
+  }
+
+  private fun setupCall() {
     setupAudio()
-    peerConnection.connection.addTrack(localVideoTrack)
-    peerConnection.connection.addTrack(localAudioTrack)
+    // Store the senders when adding tracks
+    localVideoSender = peerConnection.connection.addTrack(localVideoTrack)
+    localAudioSender = peerConnection.connection.addTrack(localAudioTrack)
+
     sessionManagerScope.launch {
-      // sending local video track to show local video from start
       _localVideoTrackFlow.emit(localVideoTrack)
 
-      if (offer != null) {
-        sendAnswer()
-      } else {
-        sendOffer()
+      when (val state = _callStateFlow.value) {
+        is CallState.Connected -> {
+          if (_callStateFlow.value is CallState.OutgoingCall) {
+            sendOffer()
+          }
+        }
+        else -> Unit
       }
     }
+  }
+
+  private fun cleanupCall() {
+    remoteVideoTrackFlow.replayCache.forEach { it.dispose() }
+
+    // Remove senders instead of tracks
+    localVideoSender?.let { sender ->
+      peerConnection.connection.removeTrack(sender)
+    }
+    localAudioSender?.let { sender ->
+      peerConnection.connection.removeTrack(sender)
+    }
+
+    // Clear the senders
+    localVideoSender = null
+    localAudioSender = null
   }
 
   override fun flipCamera() {
@@ -226,7 +299,9 @@ class WebRtcSessionManagerImpl(
   }
 
   override fun disconnect() {
-    // dispose audio & video tracks.
+    _callStateFlow.value = CallState.Idle
+
+    // Clean up tracks
     remoteVideoTrackFlow.replayCache.forEach { videoTrack ->
       videoTrack.dispose()
     }
@@ -236,57 +311,90 @@ class WebRtcSessionManagerImpl(
     localAudioTrack.dispose()
     localVideoTrack.dispose()
 
-    // dispose audio handler and video capturer.
+    // Clean up senders
+    cleanupCall()
+
+    // Clean up other resources
     audioHandler.stop()
     videoCapturer.stopCapture()
     videoCapturer.dispose()
 
-    // dispose signaling clients and socket.
     signalingClient.dispose()
+    sessionManagerScope.cancel()
   }
 
   private suspend fun sendOffer() {
-    val offer = peerConnection.createOffer().getOrThrow()
-    val result = peerConnection.setLocalDescription(offer)
-    result.onSuccess {
-      signalingClient.sendCommand(SignalingCommand.OFFER, offer.description)
+    try {
+      val offer = peerConnection.createOffer().getOrThrow()
+      val result = peerConnection.setLocalDescription(offer)
+      result.onSuccess {
+        signalingClient.sendCommand(SignalingClient.SignalingCommand.OFFER, offer.description)
+      }.onFailure { error ->
+        _callStateFlow.value = CallState.Error("Failed to create offer: ${error.message}")
+        disconnect()
+      }
+      logger.d { "[SDP] send offer: ${offer.stringify()}" }
+    } catch (e: Exception) {
+      _callStateFlow.value = CallState.Error("Failed to create offer: ${e.message}")
+      disconnect()
     }
-    logger.d { "[SDP] send offer: ${offer.stringify()}" }
   }
 
   private suspend fun sendAnswer() {
-    peerConnection.setRemoteDescription(
-      SessionDescription(SessionDescription.Type.OFFER, offer)
-    )
-    val answer = peerConnection.createAnswer().getOrThrow()
-    val result = peerConnection.setLocalDescription(answer)
-    result.onSuccess {
-      signalingClient.sendCommand(SignalingCommand.ANSWER, answer.description)
+    try {
+      val answer = peerConnection.createAnswer().getOrThrow()
+      val result = peerConnection.setLocalDescription(answer)
+      result.onSuccess {
+        signalingClient.sendCommand(SignalingClient.SignalingCommand.ANSWER, answer.description)
+      }.onFailure { error ->
+        _callStateFlow.value = CallState.Error("Failed to create answer: ${error.message}")
+        disconnect()
+      }
+      logger.d { "[SDP] send answer: ${answer.stringify()}" }
+    } catch (e: Exception) {
+      _callStateFlow.value = CallState.Error("Failed to create answer: ${e.message}")
+      disconnect()
     }
-    logger.d { "[SDP] send answer: ${answer.stringify()}" }
   }
 
-  private fun handleOffer(sdp: String) {
+  private suspend fun handleOffer(sdp: String) {
     logger.d { "[SDP] handle offer: $sdp" }
-    offer = sdp
+    try {
+      peerConnection.setRemoteDescription(
+        SessionDescription(SessionDescription.Type.OFFER, sdp)
+      )
+      sendAnswer()
+    } catch (e: Exception) {
+      _callStateFlow.value = CallState.Error("Failed to handle offer: ${e.message}")
+      disconnect()
+    }
   }
 
   private suspend fun handleAnswer(sdp: String) {
     logger.d { "[SDP] handle answer: $sdp" }
-    peerConnection.setRemoteDescription(
-      SessionDescription(SessionDescription.Type.ANSWER, sdp)
-    )
+    try {
+      peerConnection.setRemoteDescription(
+        SessionDescription(SessionDescription.Type.ANSWER, sdp)
+      )
+    } catch (e: Exception) {
+      _callStateFlow.value = CallState.Error("Failed to handle answer: ${e.message}")
+      disconnect()
+    }
   }
 
   private suspend fun handleIce(iceMessage: String) {
-    val iceArray = iceMessage.split(ICE_SEPARATOR)
-    peerConnection.addIceCandidate(
-      IceCandidate(
-        iceArray[0],
-        iceArray[1].toInt(),
-        iceArray[2]
+    try {
+      val iceArray = iceMessage.split(SignalingClient.ICE_SEPARATOR)
+      peerConnection.addIceCandidate(
+        IceCandidate(
+          iceArray[0],
+          iceArray[1].toInt(),
+          iceArray[2]
+        )
       )
-    )
+    } catch (e: Exception) {
+      logger.e { "[ICE] Failed to handle ICE candidate: ${e.message}" }
+    }
   }
 
   private fun buildCameraCapturer(): VideoCapturer {
@@ -361,5 +469,14 @@ class WebRtcSessionManagerImpl(
       val isCommunicationDeviceSet = audioManager?.setCommunicationDevice(device)
       logger.d { "[setupAudio] #sfu; isCommunicationDeviceSet: $isCommunicationDeviceSet" }
     }
+  }
+
+  sealed class CallState {
+    object Idle : CallState()
+    data class IncomingCall(val remoteUserId: String) : CallState()
+    data class OutgoingCall(val remoteUserId: String) : CallState()
+    data class Connected(val remoteUserId: String) : CallState()
+    data class Rejected(val remoteUserId: String) : CallState()
+    data class Error(val message: String) : CallState()
   }
 }

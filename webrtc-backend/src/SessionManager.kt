@@ -10,105 +10,194 @@ import java.util.*
  *
  * https://github.com/artem-bagritsevich/WebRTCKtorSignalingServerExample
  */
-object SessionManager {
+data class UserSession(
+    val userId: String,
+    val session: DefaultWebSocketServerSession
+)
 
+// Modified SessionManager for targeted calls
+object SessionManager {
     private val sessionManagerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutex = Mutex()
 
-    private val clients = mutableMapOf<UUID, DefaultWebSocketServerSession>()
+    // Map of userId to UserSession
+    private val clients = mutableMapOf<String, UserSession>()
 
-    private var sessionState: WebRTCSessionState = WebRTCSessionState.Impossible
+    // Map to track active calls between users
+    private val activeCallSessions = mutableMapOf<String, CallSession>()
 
-    fun onSessionStarted(sessionId: UUID, session: DefaultWebSocketServerSession) {
+    data class CallSession(
+        val callerId: String,
+        val targetUserId: String,
+        var state: WebRTCSessionState
+    )
+
+    fun onSessionStarted(userId: String, session: DefaultWebSocketServerSession) {
         sessionManagerScope.launch {
             mutex.withLock {
-                if (clients.size > 1) {
-                    sessionManagerScope.launch(NonCancellable) {
-                        session.send(Frame.Close()) // only two peers are supported
-                    }
-                    return@launch
-                }
-                clients[sessionId] = session
-                session.send("Added as a client: $sessionId")
-                if (clients.size > 1) {
-                    sessionState = WebRTCSessionState.Ready
-                }
-                notifyAboutStateUpdate()
+                clients[userId] = UserSession(userId, session)
+                session.send("Connected as: $userId")
+                // Notify all users about online status
+                broadcastOnlineUsers()
             }
         }
     }
 
-    fun onMessage(sessionId: UUID, message: String) {
+    private fun broadcastOnlineUsers() {
+        val onlineUsers = clients.keys.toList()
+        clients.values.forEach { userSession ->
+            sessionManagerScope.launch {
+                userSession.session.send("${MessageType.ONLINE_USERS} ${onlineUsers.joinToString(",")}")
+            }
+        }
+    }
+
+    fun isUserConnected(userId: String): Boolean {
+        return clients.containsKey(userId)
+    }
+
+    fun onMessage(userId: String, message: String) {
         when {
-            message.startsWith(MessageType.STATE.toString(), true) -> handleState(sessionId)
-            message.startsWith(MessageType.OFFER.toString(), true) -> handleOffer(sessionId, message)
-            message.startsWith(MessageType.ANSWER.toString(), true) -> handleAnswer(sessionId, message)
-            message.startsWith(MessageType.ICE.toString(), true) -> handleIce(sessionId, message)
+            message.startsWith(MessageType.STATE.toString(), true) -> handleState(userId)
+            message.startsWith(MessageType.CALL_REQUEST.toString(), true) -> handleCallRequest(userId, message)
+            message.startsWith(MessageType.CALL_RESPONSE.toString(), true) -> handleCallResponse(userId, message)
+            message.startsWith(MessageType.OFFER.toString(), true) -> handleOffer(userId, message)
+            message.startsWith(MessageType.ANSWER.toString(), true) -> handleAnswer(userId, message)
+            message.startsWith(MessageType.ICE.toString(), true) -> handleIce(userId, message)
         }
     }
 
-    private fun handleState(sessionId: UUID) {
+    private fun handleState(userId: String) {
         sessionManagerScope.launch {
-            clients[sessionId]?.send("${MessageType.STATE} $sessionState")
+            val state = when {
+                // Check if user is in an active call
+                activeCallSessions.values.any {
+                    (it.callerId == userId || it.targetUserId == userId) &&
+                            it.state == WebRTCSessionState.Active
+                } -> WebRTCSessionState.Active
+
+                // Check if user is in call creation process
+                activeCallSessions.values.any {
+                    (it.callerId == userId || it.targetUserId == userId) &&
+                            (it.state == WebRTCSessionState.Creating || it.state == WebRTCSessionState.Ready)
+                } -> WebRTCSessionState.Creating
+
+                // Check if user has pending call request
+                activeCallSessions.values.any {
+                    (it.callerId == userId || it.targetUserId == userId) &&
+                            it.state == WebRTCSessionState.Initiating
+                } -> WebRTCSessionState.Initiating
+
+                // If user is online but not in any call
+                clients.containsKey(userId) -> WebRTCSessionState.Ready
+
+                // If user is not online
+                else -> WebRTCSessionState.Impossible
+            }
+            clients[userId]?.session?.send("${MessageType.STATE} $state")
         }
     }
 
-    private fun handleOffer(sessionId: UUID, message: String) {
-        if (sessionState != WebRTCSessionState.Ready) {
-            error("Session should be in Ready state to handle offer")
+    private fun handleCallRequest(callerId: String, message: String) {
+        val targetUserId = message.substringAfter("${MessageType.CALL_REQUEST} ")
+
+        if (clients.containsKey(targetUserId)) {
+            activeCallSessions[callerId] = CallSession(
+                callerId = callerId,
+                targetUserId = targetUserId,
+                state = WebRTCSessionState.Initiating
+            )
+
+            // Notify target user about incoming call
+            clients[targetUserId]?.session?.send("${MessageType.INCOMING_CALL} $callerId")
+        } else {
+            clients[callerId]?.session?.send("${MessageType.ERROR} User $targetUserId is not online")
         }
-        sessionState = WebRTCSessionState.Creating
-        println("handling offer from $sessionId")
-        notifyAboutStateUpdate()
-        val clientToSendOffer = clients.filterKeys { it != sessionId }.values.first()
-        clientToSendOffer.send(message)
     }
 
-    private fun handleAnswer(sessionId: UUID, message: String) {
-        if (sessionState != WebRTCSessionState.Creating) {
-            error("Session should be in Creating state to handle answer")
+    private fun handleCallResponse(userId: String, message: String) {
+        val response = message.substringAfter("${MessageType.CALL_RESPONSE} ")
+        val callerId = activeCallSessions.entries.find { it.value.targetUserId == userId }?.key ?: return
+        val callSession = activeCallSessions[callerId] ?: return
+
+        if (response == "accept") {
+            callSession.state = WebRTCSessionState.Ready
+            clients[callerId]?.session?.send("${MessageType.CALL_ACCEPTED} $userId")
+        } else {
+            callSession.state = WebRTCSessionState.Impossible
+            clients[callerId]?.session?.send("${MessageType.CALL_REJECTED} $userId")
+            activeCallSessions.remove(callerId)
         }
-        println("handling answer from $sessionId")
-        val clientToSendAnswer = clients.filterKeys { it != sessionId }.values.first()
-        clientToSendAnswer.send(message)
-        sessionState = WebRTCSessionState.Active
-        notifyAboutStateUpdate()
     }
 
-    private fun handleIce(sessionId: UUID, message: String) {
-        println("handling ice from $sessionId")
-        val clientToSendIce = clients.filterKeys { it != sessionId }.values.first()
-        clientToSendIce.send(message)
+    private fun handleOffer(callerId: String, message: String) {
+        val callSession = activeCallSessions[callerId] ?: return
+        if (callSession.state != WebRTCSessionState.Ready) {
+            return
+        }
+
+        callSession.state = WebRTCSessionState.Creating
+        val targetUserId = callSession.targetUserId
+        clients[targetUserId]?.session?.send(message)
     }
 
-    fun onSessionClose(sessionId: UUID) {
+    private fun handleAnswer(userId: String, message: String) {
+        val callSession = activeCallSessions.values.find { it.targetUserId == userId } ?: return
+        if (callSession.state != WebRTCSessionState.Creating) {
+            return
+        }
+
+        clients[callSession.callerId]?.session?.send(message)
+        callSession.state = WebRTCSessionState.Active
+    }
+
+    private fun handleIce(userId: String, message: String) {
+        val callSession = activeCallSessions[userId]
+            ?: activeCallSessions.values.find { it.targetUserId == userId }
+            ?: return
+
+        val targetUserId = if (userId == callSession.callerId) {
+            callSession.targetUserId
+        } else {
+            callSession.callerId
+        }
+
+        clients[targetUserId]?.session?.send(message)
+    }
+
+    fun onSessionClose(userId: String) {
         sessionManagerScope.launch {
             mutex.withLock {
-                clients.remove(sessionId)
-                sessionState = WebRTCSessionState.Impossible
-                notifyAboutStateUpdate()
+                clients.remove(userId)
+                // Clean up any active calls involving this user
+                activeCallSessions.entries.removeIf {
+                    it.value.callerId == userId || it.value.targetUserId == userId
+                }
+                broadcastOnlineUsers()
             }
         }
     }
 
     enum class WebRTCSessionState {
-        Active, // Offer and Answer messages has been sent
-        Creating, // Creating session, offer has been sent
-        Ready, // Both clients available and ready to initiate session
-        Impossible // We have less than two clients
+        Active,     // Call is ongoing
+        Creating,   // Creating session, offer has been sent
+        Ready,      // Call accepted, ready for offer
+        Initiating, // Initial call request sent
+        Impossible  // Call ended or rejected
     }
 
     enum class MessageType {
         STATE,
+        CALL_REQUEST,
+        CALL_RESPONSE,
+        INCOMING_CALL,
+        CALL_ACCEPTED,
+        CALL_REJECTED,
+        ONLINE_USERS,
         OFFER,
         ANSWER,
-        ICE
-    }
-
-    private fun notifyAboutStateUpdate() {
-        clients.forEach { (_, client) ->
-            client.send("${MessageType.STATE} $sessionState")
-        }
+        ICE,
+        ERROR
     }
 
     private fun DefaultWebSocketServerSession.send(message: String) {

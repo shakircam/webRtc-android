@@ -30,28 +30,41 @@ fun Application.module(testing: Boolean = false) {
         get("/") {
             call.respond("Hello from WebRTC signaling server")
         }
-        webSocket("/rtc") {
-            val sessionID = UUID.randomUUID()
+
+        webSocket("/rtc/{userId}") {
+            val userId : String = (call.parameters["userId"] ?: 0).toString()
+            log.info("connected to server userId $userId")
+            when {
+                userId.isNullOrBlank() -> {
+                    close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "userId is required"))
+                    return@webSocket
+                }
+
+                SessionManager.isUserConnected(userId) -> {
+                    close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "userId already connected"))
+                    return@webSocket
+                }
+            }
+
             try {
-                SessionManager.onSessionStarted(sessionID, this)
+                SessionManager.onSessionStarted(userId, this)
 
                 for (frame in incoming) {
                     when (frame) {
                         is Frame.Text -> {
-                            SessionManager.onMessage(sessionID, frame.readText())
+                            SessionManager.onMessage(userId, frame.readText())
                         }
-
                         else -> Unit
                     }
                 }
-                println("Exiting incoming loop, closing session: $sessionID")
-                SessionManager.onSessionClose(sessionID)
+                println("Exiting incoming loop, closing session: $userId")
+                SessionManager.onSessionClose(userId)
             } catch (e: ClosedReceiveChannelException) {
-                println("onClose $sessionID")
-                SessionManager.onSessionClose(sessionID)
+                println("onClose $userId")
+                SessionManager.onSessionClose(userId)
             } catch (e: Throwable) {
-                println("onError $sessionID $e")
-                SessionManager.onSessionClose(sessionID)
+                println("onError $userId $e")
+                SessionManager.onSessionClose(userId)
             }
         }
     }
