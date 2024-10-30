@@ -19,6 +19,7 @@ package io.getstream.webrtc.sample.compose.webrtc.sessions
 import io.getstream.webrtc.sample.compose.webrtc.SignalingClient
 import io.getstream.webrtc.sample.compose.webrtc.WebRTCSessionState
 import io.getstream.webrtc.sample.compose.webrtc.peer.StreamPeerConnectionFactory
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.webrtc.VideoTrack
@@ -26,6 +27,8 @@ import org.webrtc.VideoTrack
 interface WebRtcSessionManager {
 
   val signalingClient: SignalingClient
+
+ // val sessionStateFlow: StateFlow<WebRTCSessionState>
 
   val peerConnectionFactory: StreamPeerConnectionFactory
 

@@ -75,6 +75,11 @@ class WebRtcSessionManagerImpl(
 
   // used to send local video track to the fragment
   private val _localVideoTrackFlow = MutableSharedFlow<VideoTrack>()
+
+//  private var _sessionStateFlow = MutableStateFlow(WebRTCSessionState.Ready)
+//  override val sessionStateFlow: StateFlow<WebRTCSessionState>
+//    get() = _sessionStateFlow
+
   override val localVideoTrackFlow: SharedFlow<VideoTrack> = _localVideoTrackFlow
 
   // used to send remote video track to the sender
@@ -156,6 +161,7 @@ class WebRtcSessionManagerImpl(
   }
 
   private var offer: String? = null
+  private var remoteUserId: String? = null
 
   private val peerConnection: StreamPeerConnection by lazy {
     peerConnectionFactory.makePeerConnection(
@@ -164,9 +170,10 @@ class WebRtcSessionManagerImpl(
       type = StreamPeerType.SUBSCRIBER,
       mediaConstraints = mediaConstraints,
       onIceCandidateRequest = { iceCandidate, _ ->
-        val targetId = calleeId // for now keep simple
+
+        val targetId = if (offer != null) remoteUserId else calleeId
         val iceMessage = "$targetId$ICE_SEPARATOR${iceCandidate.sdpMid}$ICE_SEPARATOR${iceCandidate.sdpMLineIndex}$ICE_SEPARATOR${iceCandidate.sdp}"
-        logger.d { "[ICE] Sending ICE to $targetId: $iceMessage" }
+        logger.d { "[ICE] sending ICE to $targetId" }
         signalingClient.sendCommand(
           SignalingCommand.ICE,iceMessage)
       },
@@ -252,42 +259,53 @@ class WebRtcSessionManagerImpl(
     val offer = peerConnection.createOffer().getOrThrow()
     val result = peerConnection.setLocalDescription(offer)
     result.onSuccess {
-      val message = "$calleeId$${offer.description}"
+      // Include calleeId to offer message
+      val message = "$currentUserId$$calleeId$${offer.description}"
       signalingClient.sendCommand(SignalingCommand.OFFER, message)
+      //_sessionStateFlow = MutableStateFlow(WebRTCSessionState.Creating)
     }
-    logger.d { "[SDP] send offer: ${offer.stringify()}" }
+    //logger.d { "[SDP] send offer: ${offer.stringify()}" }
+    logger.d { "[SDP] send offer: " }
   }
 
   private suspend fun sendAnswer() {
     val offerSdp = offer!!.split(ICE_SEPARATOR)
+    //setting offer message exclude userId
     peerConnection.setRemoteDescription(
-      SessionDescription(SessionDescription.Type.OFFER, offerSdp[1])
+      SessionDescription(SessionDescription.Type.OFFER, offerSdp[2])
     )
     val answer = peerConnection.createAnswer().getOrThrow()
     val result = peerConnection.setLocalDescription(answer)
     result.onSuccess {
-      val message = "$currentUserId$${answer.description}"
+      // sending answer to remoteUser
+      remoteUserId = offerSdp[0]
+      val message = "$currentUserId$$remoteUserId$${answer.description}"
+      logger.d { "[SDP] send answer to: remote userId: $remoteUserId" }
       signalingClient.sendCommand(SignalingCommand.ANSWER, message)
+     // _sessionStateFlow = MutableStateFlow(WebRTCSessionState.Active)
     }
-    logger.d { "[SDP] send answer: ${answer.stringify()}" }
+    //logger.d { "[SDP] send answer: ${answer.stringify()}" }
   }
 
   private fun handleOffer(sdp: String) {
+    // This offer message contain userId of the callee.
+    // we can check is this offer is valid for callee
     logger.d { "[SDP] handle offer: $sdp" }
     offer = sdp
   }
 
   private suspend fun handleAnswer(sdp: String) {
     val parts = sdp.split(ICE_SEPARATOR)
-    logger.d { "[SDP] handle answer: ${parts[1]}" }
+    // Answer message contain userId of the callee
+    logger.d { "[SDP] handle answer: ${parts[0]} :: ${parts[1]}" }
     peerConnection.setRemoteDescription(
-      SessionDescription(SessionDescription.Type.ANSWER, parts[1])
+      SessionDescription(SessionDescription.Type.ANSWER, parts[2])
     )
   }
 
   private suspend fun handleIce(iceMessage: String) {
     val iceArray = iceMessage.split(ICE_SEPARATOR)
-    logger.d { "[ICE] target user: ${iceArray[0]}; message part 1: ${iceArray[1]} message part 2: ${iceArray[2]} message part 3: ${iceArray[3]}"}
+    logger.d { "[ICE] handle ice target user: ${iceArray[0]}"}
     peerConnection.addIceCandidate(
       IceCandidate(
         iceArray[1],

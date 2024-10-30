@@ -33,20 +33,20 @@ import okhttp3.Request
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 
-class SignalingClient {
+class SignalingClient(private val callerId: String) {
   private val logger by taggedLogger("Call:SignalingClient")
   private val signalingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private val client = OkHttpClient()
   private val request = Request
     .Builder()
-    .url(BuildConfig.SIGNALING_SERVER_IP_ADDRESS)
+    .url("${BuildConfig.SIGNALING_SERVER_IP_ADDRESS}/$callerId")
     .build()
 
   // opening web socket with signaling server
   private val ws = client.newWebSocket(request, SignalingWebSocketListener())
 
   // session flow to send information about the session state to the subscribers
-  private val _sessionStateFlow = MutableStateFlow(WebRTCSessionState.Offline)
+  private val _sessionStateFlow = MutableStateFlow(WebRTCSessionState.Ready)
   val sessionStateFlow: StateFlow<WebRTCSessionState> = _sessionStateFlow
 
   // signaling commands to send commands to value pairs to the subscribers

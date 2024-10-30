@@ -30,8 +30,10 @@ fun Application.module(testing: Boolean = false) {
         get("/") {
             call.respond("Hello from WebRTC signaling server")
         }
-        webSocket("/rtc") {
-            val sessionID = UUID.randomUUID()
+        webSocket("/rtc/{userId}") {
+            //val sessionID = UUID.randomUUID()
+            val sessionID : String = (call.parameters["userId"] ?: 0).toString()
+            log.info("onSessionConnect from userId = $sessionID")
             try {
                 SessionManager.onSessionStarted(sessionID, this)
 

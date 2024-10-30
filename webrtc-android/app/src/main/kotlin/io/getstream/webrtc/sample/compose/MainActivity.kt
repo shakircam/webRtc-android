@@ -47,9 +47,9 @@ class MainActivity : ComponentActivity() {
 
     val sessionManager: WebRtcSessionManager = WebRtcSessionManagerImpl(
       context = this,
-      calleeId = "2",
-      currentUserId = "1",
-      signalingClient = SignalingClient(),
+      calleeId = "3",
+      currentUserId = "4",
+      signalingClient = SignalingClient("4"),
       peerConnectionFactory = StreamPeerConnectionFactory(this)
     )
 
