@@ -69,6 +69,8 @@ class SignalingClient(private val callerId: String) {
           handleSignalingCommand(SignalingCommand.ANSWER, text)
         text.startsWith(SignalingCommand.ICE.toString(), true) ->
           handleSignalingCommand(SignalingCommand.ICE, text)
+        text.startsWith(SignalingCommand.END_CALL.toString(), true) ->
+          handleSignalingCommand(SignalingCommand.END_CALL, text)
       }
     }
   }
@@ -80,7 +82,7 @@ class SignalingClient(private val callerId: String) {
 
   private fun handleSignalingCommand(command: SignalingCommand, text: String) {
     val value = getSeparatedMessage(text)
-    logger.d { "received signaling: $command $value" }
+    //logger.d { "received signaling: $command $value" }
     signalingScope.launch {
       _signalingCommandFlow.emit(command to value)
     }
@@ -107,5 +109,6 @@ enum class SignalingCommand {
   STATE, // Command for WebRTCSessionState
   OFFER, // to send or receive offer
   ANSWER, // to send or receive answer
-  ICE // to send and receive ice candidates
+  ICE, // to send and receive ice candidates
+  END_CALL
 }

@@ -197,6 +197,7 @@ class WebRtcSessionManagerImpl(
             SignalingCommand.OFFER -> handleOffer(commandToValue.second)
             SignalingCommand.ANSWER -> handleAnswer(commandToValue.second)
             SignalingCommand.ICE -> handleIce(commandToValue.second)
+            SignalingCommand.END_CALL -> handleEndCall()
             else -> Unit
           }
         }
@@ -227,6 +228,10 @@ class WebRtcSessionManagerImpl(
     audioManager?.isMicrophoneMute = !enabled
   }
 
+  override fun enableLoudspeaker(enabled: Boolean) {
+    audioManager?.setSpeakerphoneOn(enabled)
+  }
+
   override fun enableCamera(enabled: Boolean) {
     if (enabled) {
       videoCapturer.startCapture(resolution.width, resolution.height, 30)
@@ -236,6 +241,10 @@ class WebRtcSessionManagerImpl(
   }
 
   override fun disconnect() {
+    dispose()
+  }
+
+  private fun dispose() {
     // dispose audio & video tracks.
     remoteVideoTrackFlow.replayCache.forEach { videoTrack ->
       videoTrack.dispose()
@@ -253,6 +262,13 @@ class WebRtcSessionManagerImpl(
 
     // dispose signaling clients and socket.
     signalingClient.dispose()
+  }
+
+  override fun endCall() {
+    val message = "$ICE_SEPARATOR${remoteUserId ?: currentUserId}"
+    signalingClient.sendCommand(SignalingCommand.END_CALL,message)
+    // After sending call end status we should dispose all signaling
+    dispose()
   }
 
   private suspend fun sendOffer() {
@@ -313,6 +329,12 @@ class WebRtcSessionManagerImpl(
         iceArray[3]
       )
     )
+  }
+
+  private fun handleEndCall() {
+    // getting response from server that call is ended
+    logger.d { "[SDP] handle end call" }
+    dispose()
   }
 
   private fun buildCameraCapturer(): VideoCapturer {

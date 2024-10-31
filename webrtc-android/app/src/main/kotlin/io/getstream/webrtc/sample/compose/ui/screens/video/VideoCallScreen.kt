@@ -103,8 +103,14 @@ fun VideoCallScreen() {
           }
           CallAction.FlipCamera -> sessionManager.flipCamera()
           CallAction.LeaveCall -> {
-            sessionManager.disconnect()
+            sessionManager.endCall()
             activity?.finish()
+          }
+
+          is CallAction.EnableSpeaker -> {
+            val enabled = callMediaState.isLoudSpeakerEnabled.not()
+            callMediaState = callMediaState.copy(isLoudSpeakerEnabled = enabled)
+            sessionManager.enableLoudspeaker(enabled)
           }
         }
       }

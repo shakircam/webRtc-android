@@ -29,6 +29,10 @@ sealed class CallAction {
     val isEnabled: Boolean
   ) : CallAction()
 
+  data class EnableSpeaker(
+    val isEnabled: Boolean
+  ) : CallAction()
+
   data class ToggleCamera(
     val isEnabled: Boolean
   ) : CallAction()
@@ -66,12 +70,26 @@ fun buildDefaultCallControlActions(
     }
   )
 
+  val speakerIcon = painterResource(
+    id = if (callMediaState.isLoudSpeakerEnabled) {
+      R.drawable.baseline_speaker_enable
+    } else {
+      R.drawable.baseline_speaker_disable
+    }
+  )
+
   return listOf(
     VideoCallControlAction(
       icon = microphoneIcon,
       iconTint = Color.White,
       background = Primary,
       callAction = CallAction.ToggleMicroPhone(callMediaState.isMicrophoneEnabled)
+    ),
+    VideoCallControlAction(
+      icon = speakerIcon,
+      iconTint = Color.White,
+      background = Primary,
+      callAction = CallAction.EnableSpeaker(callMediaState.isLoudSpeakerEnabled)
     ),
     VideoCallControlAction(
       icon = cameraIcon,

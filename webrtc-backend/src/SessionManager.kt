@@ -53,6 +53,7 @@ object SessionManager {
             message.startsWith(MessageType.OFFER.toString(), true) -> handleOffer(sessionId, message)
             message.startsWith(MessageType.ANSWER.toString(), true) -> handleAnswer(sessionId, message)
             message.startsWith(MessageType.ICE.toString(), true) -> handleIce(sessionId, message)
+            message.startsWith(MessageType.END_CALL.toString(), true) -> handleEndCall(sessionId, message)
         }
     }
 
@@ -103,6 +104,15 @@ object SessionManager {
         clients[targetUserID]?.send(message)
     }
 
+    private fun handleEndCall(userId: String, message: String) {
+        val targetUserId = message.split(ICE_SEPARATOR)[1]
+        println("Handling end call from user $userId to $targetUserId")
+        clients[userId]?.send("${MessageType.END_CALL} $targetUserId")
+        clients[targetUserId]?.send("${MessageType.END_CALL} $userId")
+        onSessionClose(userId)
+        onSessionClose(targetUserId)
+    }
+
     fun onSessionClose(userId: String) {
         sessionManagerScope.launch {
             mutex.withLock {
@@ -117,8 +127,8 @@ object SessionManager {
         Active, // Offer and Answer messages has been sent
         Creating, // Creating session, offer has been sent
         Ready, // Both clients available and ready to initiate session
-        Impossible, // We have less than two clients
-        End
+        Impossible,
+        End// We have less than two clients
     }
 
     enum class MessageType {
@@ -126,7 +136,7 @@ object SessionManager {
         OFFER,
         ANSWER,
         ICE,
-        BUSY
+        END_CALL
     }
 
     private fun notifyAboutStateUpdate(callerId: String, calleeId : String) {
