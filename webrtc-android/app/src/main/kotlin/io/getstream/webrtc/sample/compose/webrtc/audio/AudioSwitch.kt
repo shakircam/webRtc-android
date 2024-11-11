@@ -157,7 +157,7 @@ class AudioSwitch internal constructor(
    * specified preferred device list or the following default list:
    * [BluetoothHeadset], [WiredHeadset], [Earpiece], [Speakerphone].
    */
-  private fun selectDevice(audioDevice: AudioDevice?) {
+   fun selectDevice(audioDevice: AudioDevice?) {
     logger.d { "[selectDevice] audioDevice: $audioDevice" }
     if (selectedDevice != audioDevice) {
       userSelectedDevice = audioDevice

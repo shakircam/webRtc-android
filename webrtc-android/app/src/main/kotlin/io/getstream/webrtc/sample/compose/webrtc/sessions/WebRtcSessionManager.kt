@@ -28,8 +28,6 @@ interface WebRtcSessionManager {
 
   val signalingClient: SignalingClient
 
- // val sessionStateFlow: StateFlow<WebRTCSessionState>
-
   val peerConnectionFactory: StreamPeerConnectionFactory
 
   val localVideoTrackFlow: SharedFlow<VideoTrack>
