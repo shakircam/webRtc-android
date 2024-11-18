@@ -217,6 +217,10 @@ class WebRtcSessionManagerImpl(
     audioManager?.isMicrophoneMute = !enabled
   }
 
+  override fun enableLoudspeaker(enable: Boolean) {
+    audioHandler.enableLoudSpeaker(enable)
+  }
+
   override fun enableCamera(enabled: Boolean) {
     if (enabled) {
       videoCapturer.startCapture(resolution.width, resolution.height, 30)

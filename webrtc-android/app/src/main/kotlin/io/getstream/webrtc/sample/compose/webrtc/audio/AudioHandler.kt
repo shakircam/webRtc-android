@@ -33,6 +33,9 @@ interface AudioHandler {
    * Called when a room is disconnected.
    */
   fun stop()
+
+  // enable/disable loud speaker
+  fun enableLoudSpeaker(enable: Boolean)
 }
 
 class AudioSwitchHandler constructor(private val context: Context) : AudioHandler {
@@ -72,6 +75,25 @@ class AudioSwitchHandler constructor(private val context: Context) : AudioHandle
     handler.post {
       audioSwitch?.stop()
       audioSwitch = null
+    }
+  }
+
+  override fun enableLoudSpeaker(enable: Boolean) {
+    logger.d { "[enableLoudSpeaker] enable: $enable" }
+    handler.post {
+      try {
+        audioSwitch?.apply {
+          // Select speaker or earpiece based on enable parameter
+          selectDevice(
+            if (enable) AudioDevice.Speakerphone()
+            else AudioDevice.Earpiece()
+          )
+          // Activate will handle the actual audio routing through AudioManagerAdapter
+          activate()
+        }
+      } catch (e: Exception) {
+        logger.e { "[enableLoudSpeaker] Error: ${e.message}" }
+      }
     }
   }
 

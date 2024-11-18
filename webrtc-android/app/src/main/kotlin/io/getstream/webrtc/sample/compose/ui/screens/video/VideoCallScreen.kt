@@ -17,6 +17,7 @@
 package io.getstream.webrtc.sample.compose.ui.screens.video
 
 import android.app.Activity
+import android.util.Log
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -103,8 +104,14 @@ fun VideoCallScreen() {
           }
           CallAction.FlipCamera -> sessionManager.flipCamera()
           CallAction.LeaveCall -> {
-            sessionManager.disconnect()
             activity?.finish()
+          }
+
+          is CallAction.EnableSpeaker -> {
+            val enabled = callMediaState.isLoudSpeakerEnabled.not()
+            callMediaState = callMediaState.copy(isLoudSpeakerEnabled = enabled)
+            Log.d("speaker ","$enabled")
+            sessionManager.enableLoudspeaker(enabled)
           }
         }
       }

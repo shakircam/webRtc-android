@@ -23,6 +23,8 @@ import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import io.getstream.log.taggedLogger
 
 internal class AudioManagerAdapterImpl(
@@ -38,6 +40,7 @@ internal class AudioManagerAdapterImpl(
   private var savedIsMicrophoneMuted = false
   private var savedSpeakerphoneEnabled = false
   private var audioRequest: AudioFocusRequest? = null
+  private val handler = Handler(Looper.getMainLooper())
 
   init {
     logger.i { "<init> audioFocusChangeListener: $audioFocusChangeListener" }
@@ -93,9 +96,37 @@ internal class AudioManagerAdapterImpl(
     audioManager.run { if (enable) startBluetoothSco() else stopBluetoothSco() }
   }
 
+//  override fun enableSpeakerphone(enable: Boolean) {
+//    logger.i { "[enableSpeakerphone] enable: $enable" }
+//    audioManager.isSpeakerphoneOn = enable
+//  }
+
   override fun enableSpeakerphone(enable: Boolean) {
-    logger.i { "[enableSpeakerphone] enable: $enable" }
-    audioManager.isSpeakerphoneOn = enable
+    logger.d { "[enablePhoneSpeaker] enable: $enable" }
+
+    handler.post {
+      try {
+
+        // Additional check for Android 12+ (API level 31)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          val devices = audioManager.availableCommunicationDevices
+          val deviceType = if (enable) AudioDeviceInfo.TYPE_BUILTIN_SPEAKER else AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+          devices.firstOrNull { it.type == deviceType
+          }?.let { device ->
+            audioManager.setCommunicationDevice(device)
+          }
+          logger.d { "[enablePhoneSpeaker] for upper versions" }
+        } else {
+          // Fallback for older Android versions
+          audioManager.mode = AudioManager.MODE_IN_COMMUNICATION // Ensure in-call mode
+          audioManager.isSpeakerphoneOn = enable
+
+          logger.d { "[enablePhoneSpeaker] for older versions" }
+        }
+      } catch (e: Exception) {
+        logger.e { "[enablePhoneSpeaker] Error: ${e.message}" }
+      }
+    }
   }
 
   override fun mute(mute: Boolean) {
