@@ -229,7 +229,6 @@ class WebRtcSessionManagerImpl(
   }
 
   override fun enableLoudspeaker(enabled: Boolean) {
-    //audioManager?.setSpeakerphoneOn(enabled)
     audioHandler.enablePhoneSpeaker(enabled)
   }
 

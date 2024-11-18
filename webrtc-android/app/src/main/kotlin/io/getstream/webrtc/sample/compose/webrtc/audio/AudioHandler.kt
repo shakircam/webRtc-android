@@ -21,11 +21,16 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
+import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
+import androidx.annotation.RequiresApi
+import androidx.core.content.ContextCompat.getSystemService
 import io.getstream.log.StreamLog
 import io.getstream.log.taggedLogger
 
@@ -95,6 +100,11 @@ class AudioSwitchHandler constructor(private val context: Context) : AudioHandle
               audioManager.isSpeakerphoneOn = true
               setAppropriateVolume(true)
             }
+            if (!isAndroid13Plus && !isHeadsetPlugged) {
+              forceAudioMode()
+              audioManager.isSpeakerphoneOn = true
+              setAppropriateVolume(true)
+            }
           }
           is AudioDevice.Earpiece -> {
             isHeadsetPlugged = false
@@ -130,12 +140,8 @@ class AudioSwitchHandler constructor(private val context: Context) : AudioHandle
       // Set initial audio mode
       mode = AudioManager.MODE_IN_COMMUNICATION
 
-      // Set initial speaker state based on Android version
-      if (isAndroid13Plus) {
-        isSpeakerphoneOn = true  // Default to speaker for Android 13+
-      } else {
-        isSpeakerphoneOn = false // Default to earpiece/headphone for lower versions
-      }
+      // initially earpiece mode
+      isSpeakerphoneOn = false
 
       // Set initial volume
       setAppropriateVolume(isSpeakerphoneOn)
@@ -225,6 +231,11 @@ class AudioSwitchHandler constructor(private val context: Context) : AudioHandle
 //    }
 //  }
 
+
+  // working on android 12+ version (speaker,earpiece,headphone)
+  // working on android 8 version (speaker,earpiece,headphone)
+  // not working on android 9,11 version (speaker)
+
   override fun enablePhoneSpeaker(enable: Boolean) {
     logger.d { "[enablePhoneSpeaker] enable: $enable, isHeadsetPlugged: $isHeadsetPlugged" }
     if (!isCallActive) return
@@ -232,132 +243,176 @@ class AudioSwitchHandler constructor(private val context: Context) : AudioHandle
     isSpeakerEnabled = enable
     handler.post {
       try {
-        if (isHeadsetPlugged) {
-          // If headset is plugged, always use headset
-          forceAudioMode()
-          audioManager.isSpeakerphoneOn = false
-          setAppropriateVolume(false)
-          audioSwitch?.apply {
-            selectDevice(AudioDevice.WiredHeadset())
-            activate()
-          }
-          return@post
-        }
-
         // Set audio mode first
         forceAudioMode()
 
-        // Force speaker settings multiple times to ensure it takes effect
-        repeat(2) { attempt ->
-          handler.postDelayed({
-            try {
-              if (enable) {
-                // Enable speaker
-                audioManager.isSpeakerphoneOn = true
+        // Set appropriate volume
+        setAppropriateVolume(enable)
 
-                // Set maximum volume for speaker
-                audioManager.setStreamVolume(
-                  AudioManager.STREAM_VOICE_CALL,
-                  audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL),
-                  0
-                )
-
-                // Additional speaker enforcement for older versions
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-                  audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-                  audioManager.setStreamVolume(
-                    AudioManager.STREAM_VOICE_CALL,
-                    audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL),
-                    0
-                  )
-                }
-              } else {
-                // Disable speaker
-                audioManager.isSpeakerphoneOn = false
-                setAppropriateVolume(false)
-              }
-            } catch (e: Exception) {
-              logger.e { "[enablePhoneSpeaker] Error on attempt $attempt: ${e.message}" }
-            }
-          }, attempt * 100L) // Delays: 0ms, 100ms
+        // Update AudioSwitch (if used)
+        audioSwitch?.apply {
+          selectDevice(
+            if (enable) AudioDevice.Speakerphone()
+            else AudioDevice.Earpiece())
+          activate()
         }
 
-        // Additional routing for Android 12 and above
+        // Additional check for Android 12+ (API level 31)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
           val devices = audioManager.availableCommunicationDevices
-          val deviceType = if (enable) {
-            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
-          } else {
-            AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+          val deviceType = if (enable) AudioDeviceInfo.TYPE_BUILTIN_SPEAKER else AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+          devices.firstOrNull { it.type == deviceType
+          }?.let { device ->
+            audioManager.setCommunicationDevice(device)
           }
-          devices.firstOrNull { it.type == deviceType }?.let { device ->
-            handler.postDelayed({
-              try {
-                audioManager.setCommunicationDevice(device)
-              } catch (e: Exception) {
-                logger.e { "[enablePhoneSpeaker] Error setting communication device: ${e.message}" }
-              }
-            }, 200) // Additional delay for device setting
-          }
+          logger.d { "[enablePhoneSpeaker] for upper versions" }
+        } else {
+          // Fallback for older Android versions
+          audioManager.mode = AudioManager.MODE_IN_COMMUNICATION // Ensure in-call mode
+          audioManager.isSpeakerphoneOn = enable
+
+          logger.d { "[enablePhoneSpeaker] for older versions" }
         }
-
-        // Update AudioSwitch
-        audioSwitch?.apply {
-          if (enable) {
-            handler.postDelayed({
-              selectDevice(AudioDevice.Speakerphone())
-              activate()
-            }, 300)
-          } else {
-            selectDevice(AudioDevice.Earpiece())
-            activate()
-          }
-        }
-
-        // Final check and enforcement
-        handler.postDelayed({
-          if (enable && !isHeadsetPlugged) {
-            audioManager.apply {
-              mode = AudioManager.MODE_IN_COMMUNICATION
-              isSpeakerphoneOn = true
-              setStreamVolume(
-                AudioManager.STREAM_VOICE_CALL,
-                getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL),
-                0
-              )
-            }
-          }
-        }, 500)
-
       } catch (e: Exception) {
         logger.e { "[enablePhoneSpeaker] Error: ${e.message}" }
       }
     }
   }
 
-  // Add this helper method
-  private fun enforceAudioRouting(enable: Boolean) {
-    audioManager.apply {
-      mode = AudioManager.MODE_IN_COMMUNICATION
-      isSpeakerphoneOn = enable
-      if (enable) {
-        setStreamVolume(
-          AudioManager.STREAM_VOICE_CALL,
-          getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL),
-          0
-        )
-      }
-    }
-  }
 
-
+// Last working method
+//  override fun enablePhoneSpeaker(enable: Boolean) {
+//    logger.d { "[enablePhoneSpeaker] enable: $enable, isHeadsetPlugged: $isHeadsetPlugged" }
+//    if (!isCallActive) return
+//
+//    isSpeakerEnabled = enable
+//    handler.post {
+//      try {
+//        if (isHeadsetPlugged) {
+//          // Handle headset routing
+//          forceAudioMode()
+//          audioManager.isSpeakerphoneOn = false
+//          setAppropriateVolume(false)
+//          audioSwitch?.apply {
+//            selectDevice(AudioDevice.WiredHeadset())
+//            activate()
+//          }
+//          return@post
+//        }
+//
+//        // Set audio mode first
+//        forceAudioMode()
+//
+//        when {
+//          // For Android 12+ (API 31+)
+//          Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+//            val devices = audioManager.availableCommunicationDevices
+//            val deviceType = if (enable) {
+//              AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+//            } else {
+//              AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+//            }
+//            devices.firstOrNull { it.type == deviceType }?.let { device ->
+//              audioManager.setCommunicationDevice(device)
+//            }
+//            audioManager.isSpeakerphoneOn = enable
+//          }
+//
+//          // For Android 9 and 11
+//          Build.VERSION.SDK_INT in Build.VERSION_CODES.P..Build.VERSION_CODES.R -> {
+//            // Special handling for Android 9-11
+//            if (enable) {
+//
+//                handler.postDelayed({
+//                  try {
+//                    audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+//                    audioManager.isSpeakerphoneOn = true
+//
+//                    // Force maximum volume for speaker
+//                    audioManager.setStreamVolume(
+//                      AudioManager.STREAM_VOICE_CALL,
+//                      audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL),
+//                      0
+//                    )
+//
+//                    // Additional settings for these versions
+//                    audioManager.setParameters("speaker_on=1")
+//                  } catch (e: Exception) {
+//                    logger.e { "[enablePhoneSpeaker] Error on attempt  ${e.message}" }
+//                  }
+//                },  500)
+//
+//            } else {
+//              audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+//              audioManager.isSpeakerphoneOn = false
+//              audioManager.setParameters("speaker_on=0")
+//              setAppropriateVolume(false)
+//            }
+//          }
+//
+//          // For Android 8
+//          else -> {
+//            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+//            audioManager.isSpeakerphoneOn = enable
+//            if (enable) {
+//              audioManager.setStreamVolume(
+//                AudioManager.STREAM_VOICE_CALL,
+//                audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL),
+//                0
+//              )
+//            } else {
+//              setAppropriateVolume(false)
+//            }
+//          }
+//        }
+//
+//        // Set appropriate volume
+//        setAppropriateVolume(enable)
+//
+//        // Update AudioSwitch
+//        handler.postDelayed({
+//          audioSwitch?.apply {
+//            selectDevice(if (enable) AudioDevice.Speakerphone() else AudioDevice.Earpiece())
+//            activate()
+//          }
+//        }, 200)
+//
+//        // Final check for Android 9-11
+//        if (Build.VERSION.SDK_INT in Build.VERSION_CODES.P..Build.VERSION_CODES.R && enable) {
+//          handler.postDelayed({
+//            if (!audioManager.isSpeakerphoneOn) {
+//              audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+//              audioManager.isSpeakerphoneOn = true
+//              audioManager.setStreamVolume(
+//                AudioManager.STREAM_VOICE_CALL,
+//                audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL),
+//                0
+//              )
+//            }
+//          }, 500)
+//        }
+//
+//      } catch (e: Exception) {
+//        logger.e { "[enablePhoneSpeaker] Error: ${e.message}" }
+//      }
+//    }
+//  }
 
 
   private fun forceAudioMode() {
-    audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-    handler.postDelayed({
+    try {
       audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-    }, 100)
+
+      // For Android 9-11, additional mode enforcement
+      if (Build.VERSION.SDK_INT in Build.VERSION_CODES.P..Build.VERSION_CODES.R) {
+        handler.postDelayed({
+          audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+        }, 100)
+      }
+    } catch (e: Exception) {
+      logger.e { "[enforceAudioMode] Error: ${e.message}" }
+    }
+
   }
 
   private fun setAppropriateVolume(isSpeaker: Boolean) {
@@ -367,7 +422,7 @@ class AudioSwitchHandler constructor(private val context: Context) : AudioHandle
     val targetVolume = when {
       isAndroid13Plus && isSpeaker -> (maxVolume * 0.9).toInt()  // 90% volume for speaker on Android 13+
       isAndroid13Plus && !isSpeaker -> (maxVolume * 0.7).toInt() // 70% volume for earpiece/headset on Android 13+
-      !isAndroid13Plus && isSpeaker -> maxVolume                  // Full volume for speaker on older versions
+      !isAndroid13Plus && isSpeaker -> (maxVolume * 0.9).toInt() // 90% volume for speaker on older versions
       else -> (maxVolume * 0.6).toInt()                          // 60% volume for earpiece/headset on older versions
     }
 
@@ -514,4 +569,5 @@ class AudioSwitchHandler constructor(private val context: Context) : AudioHandle
     }
   }
 }
+
 

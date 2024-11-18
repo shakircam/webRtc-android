@@ -72,9 +72,9 @@ fun buildDefaultCallControlActions(
 
   val speakerIcon = painterResource(
     id = if (callMediaState.isLoudSpeakerEnabled) {
-      R.drawable.baseline_speaker_enable
+      R.drawable.baseline_volume_up_24
     } else {
-      R.drawable.baseline_speaker_disable
+      R.drawable.baseline_volume_down_24
     }
   )
 
